@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- BLL: сервіси, DTO, AutoMapper-профілі, бізнес-валідація. Залежить від Dal і Domain. -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- 14.x — остання версія AutoMapper під MIT-ліцензією (з 15.x потрібен ліцензійний ключ) -->
+    <PackageReference Include="AutoMapper" Version="14.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Orders.Dal\Orders.Dal.csproj" />
+    <ProjectReference Include="..\Orders.Domain\Orders.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

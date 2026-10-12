@@ -298,3 +298,105 @@ EXEC dbo.usp_ChangeOrderStatus @OrderId = 4, @NewStatus = N'Shipped';
 | MongoDB: 3–4 колекції, embedding, referencing, гібрид | `db/p3/collections.js`, `db/p3/seed.js`, `docs/mongodb-model.md`, `docs/sample-documents.json` |
 | Ідемпотентні seed-скрипти | `db/p1/seed.sql`, `db/p2/seed.sql` (`WHERE NOT EXISTS`), `db/p3/seed.js` (upsert за `_id`) |
 | Скрипти розгортання, README з порядком запуску й ERD | `db/deploy.ps1`, `db/deploy.sh`, `db/docker-compose.yml`; окремі `schema.sql` / `procedures.sql` / `seed.sql` / `collections.js` / `seed.js`; розділи 6 і 8 цього README, `db/README.md`, `docs/erd/` |
+
+
+---
+
+# Лаб. 02 — шарувата архітектура мікросервісу «Замовлення» (ASP.NET Core, ADO.NET + Dapper, Aspire)
+
+Реалізація контексту «Замовлення» поверх БД `CustomShop_Orders` з Лаб. 01. Рішення — `Platform.slnx`.
+
+## Структура
+
+```
+Platform.slnx                     одне рішення на всю платформу
+Platform.AppHost/                 оркестрація Aspire (AppHost.cs)
+Services/Orders/
+  Orders.Api/                     контролери, Program.cs, appsettings.json, глобальний обробник помилок
+  Orders.Bll/                     сервіси, DTO, AutoMapper-профіль, валідація (Validation/)
+  Orders.Dal/                     репозиторії (Dapper + чистий ADO.NET), Unit of Work, IDbSession
+  Orders.Domain/                  моделі, статуси замовлення, доменні винятки
+db/  docs/                        Лаб. 01
+```
+
+Залежності: `Api → Bll → Dal → Domain` (Bll також бачить Domain).
+
+| Що | Де |
+|---|---|
+| `IGenericRepository<T>` + спеціалізовані інтерфейси | `Orders.Dal/Abstractions/` |
+| Репозиторій на чистому ADO.NET (`SqlCommand` + `SqlDataReader`) | `Orders.Dal/Repositories/OrderSummaryRepository.cs` |
+| Репозиторії на Dapper зі спільною базою `BaseDapperRepository<T>` | `CustomerRepository`, `ProductRepository`, `OrderRepository` (multi-mapping, `usp_CreateOrder`, `usp_ChangeOrderStatus`), `OrderItemRepository` |
+| Усі SQL-запити параметризовані; ідентифікатори таблиць/стовпців лише з коду й перевіряються `SqlBuilder` | `Orders.Dal/Infrastructure/SqlBuilder.cs` |
+| Unit of Work: одне з'єднання й транзакція на всі репозиторії (Scoped) | `UnitOfWork.cs`, `DbSession.cs` |
+| Помилки SQL Server → доменні винятки (`50001…50012`, `547`, `2601/2627`) | `SqlExceptionTranslator.cs` |
+| Транзакційна операція через кілька репозиторіїв (знімок назви й ціни) | `OrderService.PlaceAsync` |
+| Валідація: DataAnnotations на DTO + бізнес-правила в BLL | `Dtos/`, `Validation/` |
+| NotFound → 404, BusinessConflict → 409, Validation → 400, решта → 500 (ProblemDetails + `traceId`) | `Orders.Api/Middleware/DomainExceptionHandler.cs` |
+
+## Запуск через Aspire
+
+Потрібні .NET 9 SDK і запущений Docker Desktop (Aspire сам піднімає контейнер SQL Server; контейнери з Лаб. 01 для цього запускати не потрібно):
+
+```bash
+dotnet run --project Platform.AppHost --launch-profile http
+```
+
+AppHost (`Platform.AppHost/AppHost.cs`) оркеструє:
+
+| Ресурс | Що це |
+|---|---|
+| `sql` | SQL Server 2022 у контейнері з постійним volume `customshop-orders-sql`: дані переживають перезапуск AppHost; пароль SA зафіксований в `AppHost.cs` (параметр `sql-password`) |
+| `OrdersDb` | база `CustomShop_Orders` на цьому сервері; щойно вона готова, AppHost виконує `db/p1/schema.sql → procedures.sql → seed.sql` (`DatabaseInitializer.cs`) — лише якщо таблиці `Orders` ще немає, тому наявні дані не перезаписуються |
+| `orders-api` | `Orders.Api`; отримує рядок підключення через `WithReference(ordersDb)` як `ConnectionStrings__OrdersDb`, стартує після готовності БД (`WaitFor`), health check — `/health` |
+
+У консолі з'явиться посилання на **Aspire Dashboard** (http://localhost:15170, токен — у посиланні): ресурси `sql`, `OrdersDb` і `orders-api` мають перейти у стан **Running**, health check `orders-api` — **Healthy**. URL API беріть із Dashboard; Swagger — `<url>/swagger`.
+
+Контейнер SQL Server одноразовий: Aspire зупиняє й видаляє його при завершенні AppHost, а наступний запуск створює новий і підключає той самий volume — дані зберігаються. Щоб повернути початковий стан: зупиніть AppHost, виконайте `docker volume rm customshop-orders-sql` і запустіть знову.
+
+Без Aspire: підніміть SQL Server з Лаб. 01 (`docker compose -f db/docker-compose.yml up -d`, `db/deploy.ps1`) і запустіть `dotnet run --project Services/Orders/Orders.Api` (рядок підключення — `ConnectionStrings:OrdersDb` в `Services/Orders/Orders.Api/appsettings.json`, перевизначається змінною середовища `ConnectionStrings__OrdersDb`; Swagger: http://localhost:5080/swagger).
+
+## Приклади запитів
+
+```bash
+API=http://localhost:5080   # з Aspire — адреса orders-api з Dashboard
+
+curl $API/api/customers/1
+curl "$API/api/customers/1/orders?status=Shipped&page=1&pageSize=5"
+curl "$API/api/products?page=1&pageSize=3"
+curl $API/api/orders/statistics
+
+# оформлення замовлення (201 + Location)
+curl -i -X POST $API/api/orders -H "Content-Type: application/json" -d '{
+  "customerId": 1,
+  "delivery": { "recipientName": "Test Person", "phone": "+380671112233", "city": "Kyiv",
+                "shippingAddress": "Test str 1", "deliveryMethod": "NovaPoshta" },
+  "items": [ { "productId": 1, "units": 1, "discount": 0,
+               "options": [ { "optionId": 2, "group": "Світчі", "value": "Holy Panda", "priceDelta": 900 } ] } ]
+}'
+
+# зміна статусу; rowVersion (необов'язково) — значення з останньої відповіді API
+curl -X POST $API/api/orders/5/status -H "Content-Type: application/json" -d '{"newStatus":"AwaitingValidation"}'
+
+# SQL-ін'єкція не проходить: апостроф зберігається як звичайний текст
+curl -X POST $API/api/customers -H "Content-Type: application/json" \
+  -d "{\"email\":\"o.brien@example.com\",\"fullName\":\"Patrick O'Brien'; DROP TABLE Customers;--\"}"
+```
+
+Очікувані помилки (ProblemDetails):
+
+| Запит | Код |
+|---|---|
+| `GET /api/orders/999999` | 404 |
+| недопустимий перехід статусу (`Submitted → Shipped`), нестача товару на складі, дубль email, застарілий `rowVersion` | 409 |
+| порожній список позицій, некоректні дані | 400 |
+
+## Ендпоїнти
+
+| Метод і шлях | Опис |
+|---|---|
+| `GET/POST /api/customers`, `GET/PUT/DELETE /api/customers/{id}` | CRUD покупців (`usp_UpsertCustomer`, `usp_DeleteCustomer`, RowVersion у `PUT`) |
+| `GET /api/customers/{id}/orders` | замовлення клієнта зі статусом-фільтром і пагінацією (ADO.NET, `usp_GetCustomerOrders`) |
+| `GET/POST /api/products`, `GET/PUT/DELETE /api/products/{id}` | локальна копія довідника товарів |
+| `POST /api/orders`, `GET /api/orders/{id}` | оформлення замовлення в одній транзакції; перегляд із покупцем, доставкою, позиціями й опціями |
+| `POST /api/orders/{id}/status` | зміна статусу (`usp_ChangeOrderStatus`: переходи, склад, RowVersion) |
+| `GET /api/orders/statistics` | кількість і сума замовлень за статусами (`vw_OrderSummary`) |
