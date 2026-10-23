@@ -1,0 +1,90 @@
+// Проєкт №2 — CustomShop_Catalog. Вставити на https://dbdiagram.io/d
+
+Project CustomShop_Catalog {
+  database_type: 'SQL Server'
+  Note: 'Контекст «Каталог» — власник даних про товари та опції кастомізації.'
+}
+
+Table Brands {
+  Id int [pk, increment]
+  Name nvarchar(100) [not null, unique]
+  Country nvarchar(60)
+  Website nvarchar(200) [note: 'CHECK https://…']
+  CreatedAt datetime2 [not null]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+}
+
+Table Categories {
+  Id int [pk, increment]
+  Name nvarchar(100) [not null]
+  Slug nvarchar(100) [not null, unique]
+  SortOrder int [not null, default: 0]
+  CreatedAt datetime2 [not null]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+}
+
+Table Products {
+  Id bigint [pk, increment]
+  BrandId int [not null, ref: > Brands.Id]
+  Sku nvarchar(50) [not null, unique]
+  Name nvarchar(200) [not null]
+  Slug nvarchar(200) [not null, unique]
+  ProductType nvarchar(20) [not null, note: 'CHECK: Keyboard | Mouse | Headphones | Speakers | Mousepad | Accessory']
+  Description nvarchar(2000)
+  BasePrice decimal(18,2) [not null, note: 'CHECK > 0']
+  Stock int [not null, default: 0, note: 'CHECK >= 0']
+  IsCustomizable bit [not null, default: 0]
+  IsActive bit [not null, default: 1]
+  CreatedAt datetime2 [not null]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+  RowVersion rowversion
+  indexes {
+    (ProductType, BasePrice) [name: 'IX_Products_ProductType_BasePrice']
+    Name [name: 'IX_Products_Name']
+    BrandId [name: 'IX_Products_BrandId']
+  }
+}
+
+Table ProductSpecifications {
+  ProductId bigint [pk, ref: - Products.Id, note: '1:1, ON DELETE CASCADE']
+  WeightGrams int [note: 'CHECK > 0']
+  Dimensions nvarchar(50)
+  ConnectionType nvarchar(20) [not null, note: 'CHECK: Wired | Wireless | Bluetooth | Hybrid | None']
+  Material nvarchar(100)
+  Color nvarchar(50)
+  WarrantyMonths int [not null, default: 12, note: 'CHECK 0..60']
+}
+
+Table ProductCategories {
+  ProductId bigint [ref: > Products.Id, note: 'ON DELETE CASCADE']
+  CategoryId int [ref: > Categories.Id, note: 'ON DELETE CASCADE']
+  AddedAt datetime2 [not null, default: `SYSUTCDATETIME()`, note: 'власне поле M:N']
+  IsFeatured bit [not null, default: 0, note: 'власне поле M:N']
+  indexes {
+    (ProductId, CategoryId) [pk]
+    (CategoryId, AddedAt) [name: 'IX_ProductCategories_CategoryId_AddedAt']
+  }
+}
+
+Table CustomizationOptions {
+  Id bigint [pk, increment]
+  ProductId bigint [not null, ref: > Products.Id, note: 'ON DELETE CASCADE']
+  GroupName nvarchar(100) [not null]
+  Value nvarchar(200) [not null]
+  PriceDelta decimal(18,2) [not null, default: 0, note: 'CHECK >= 0']
+  IsDefault bit [not null, default: 0, note: 'не більше одного default у групі']
+  IsAvailable bit [not null, default: 1]
+  SortOrder int [not null, default: 0]
+  indexes {
+    (ProductId, GroupName, Value) [unique]
+  }
+}

@@ -1,0 +1,46 @@
+# Локальне середовище для трьох баз Лаб. 01.
+# Запуск (з папки db/):   docker compose up -d
+# Зупинка:                docker compose down        (дані зберігаються у volumes)
+# Повне очищення:         docker compose down -v
+#
+# Папка db/ монтується в обидва контейнери як /db (лише читання),
+# тому deploy-скрипти з ключем -Docker / --docker виконують SQL і JS всередині контейнерів —
+# локально встановлювати sqlcmd і mongosh не потрібно.
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: customshop-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${SQL_PASSWORD:-Str0ng!Passw0rd}"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+      - ./:/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  mongodb:
+    image: mongo:7
+    container_name: customshop-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+      - ./:/db:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  sql-data:
+  mongo-data:

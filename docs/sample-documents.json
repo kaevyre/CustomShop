@@ -1,0 +1,499 @@
+{
+  "userProfiles": [
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d40001"
+      },
+      "customerId": {
+        "$numberInt": "1"
+      },
+      "displayName": "Олена К.",
+      "avatarUrl": "avatars/olena.jpg",
+      "bio": "Збираю клавіатури в ретро-стилі",
+      "socials": {
+        "instagram": "@olena.keys"
+      },
+      "favoriteSwitches": [
+        "Holy Panda",
+        "Gateron Red"
+      ],
+      "stats": {
+        "reviewsCount": {
+          "$numberInt": "2"
+        },
+        "buildsCount": {
+          "$numberInt": "1"
+        }
+      },
+      "joinedAt": {
+        "$date": "2026-08-30T09:00:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d40002"
+      },
+      "customerId": {
+        "$numberInt": "2"
+      },
+      "displayName": "Andrii_M",
+      "socials": {
+        "youtube": "@andrii-desk",
+        "twitch": "andrii_m"
+      },
+      "stats": {
+        "reviewsCount": {
+          "$numberInt": "1"
+        },
+        "buildsCount": {
+          "$numberInt": "1"
+        }
+      },
+      "joinedAt": {
+        "$date": "2026-09-19T12:00:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d40003"
+      },
+      "customerId": {
+        "$numberInt": "3"
+      },
+      "displayName": "Марія",
+      "joinedAt": {
+        "$date": "2026-10-01T15:30:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d40004"
+      },
+      "customerId": {
+        "$numberInt": "4"
+      },
+      "displayName": "Тарас Б.",
+      "avatarUrl": "avatars/taras.png",
+      "joinedAt": {
+        "$date": "2026-09-25T18:00:00.000Z"
+      }
+    }
+  ],
+  "reviews": [
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d41001"
+      },
+      "productId": {
+        "$numberInt": "1"
+      },
+      "productName": "Клавіатура Aurora 75 (алюміній)",
+      "productType": "Keyboard",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40001"
+        },
+        "displayName": "Олена К."
+      },
+      "rating": {
+        "$numberInt": "5"
+      },
+      "title": "Найкраща клавіатура, яку я мала",
+      "text": "Корпус важкий і не дзвенить, Holy Panda відчуваються дуже тактильно. Кейкапи Retro Beige виглядають ще краще, ніж на фото.",
+      "pros": [
+        "Якість корпусу",
+        "Звук",
+        "Швидке виготовлення"
+      ],
+      "cons": [
+        "Важка для поїздок"
+      ],
+      "photos": [
+        "reviews/aurora-1.jpg",
+        "reviews/aurora-2.jpg"
+      ],
+      "customization": {
+        "switches": "Holy Panda",
+        "keycaps": "Retro Beige",
+        "caseColor": "Silver"
+      },
+      "verifiedPurchase": true,
+      "orderId": {
+        "$numberInt": "1"
+      },
+      "helpfulVotes": {
+        "$numberInt": "14"
+      },
+      "comments": [
+        {
+          "author": "Andrii_M",
+          "text": "Які стабілізатори стоять?",
+          "createdAt": {
+            "$date": "2026-09-13T08:10:00.000Z"
+          }
+        },
+        {
+          "author": "Олена К.",
+          "text": "Заводські, змащені — не тарахтять",
+          "createdAt": {
+            "$date": "2026-09-13T09:02:00.000Z"
+          }
+        }
+      ],
+      "discussionId": {
+        "$oid": "66f0c2a1e4b0a1b2c3d42001"
+      },
+      "createdAt": {
+        "$date": "2026-09-12T18:00:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d41002"
+      },
+      "productId": {
+        "$numberInt": "5"
+      },
+      "productName": "Килимок Canvas XL 900×400",
+      "productType": "Mousepad",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40001"
+        },
+        "displayName": "Олена К."
+      },
+      "rating": {
+        "$numberInt": "4"
+      },
+      "text": "Принт яскравий, край прошитий акуратно. Перші дні був запах гуми.",
+      "customization": {
+        "print": "Власний принт",
+        "printUrl": "prints/olena-retro.png",
+        "size": "900×400"
+      },
+      "verifiedPurchase": true,
+      "orderId": {
+        "$numberInt": "1"
+      },
+      "helpfulVotes": {
+        "$numberInt": "3"
+      },
+      "comments": [],
+      "createdAt": {
+        "$date": "2026-09-14T10:30:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d41003"
+      },
+      "productId": {
+        "$numberInt": "8"
+      },
+      "productName": "Клавіатура Pocket 60 Hot-Swap",
+      "productType": "Keyboard",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40002"
+        },
+        "displayName": "Andrii_M"
+      },
+      "rating": {
+        "$numberInt": "4"
+      },
+      "title": "Ідеальна для мінімалістичного столу",
+      "text": "Hot-swap працює без проблем, поставив Kailh Box White. Шкода, що немає бездротового режиму.",
+      "pros": [
+        "Hot-swap",
+        "Компактність"
+      ],
+      "cons": [
+        "Лише дротова"
+      ],
+      "customization": {
+        "switches": "Kailh Box White",
+        "plate": "FR4",
+        "lubed": true
+      },
+      "verifiedPurchase": false,
+      "helpfulVotes": {
+        "$numberInt": "6"
+      },
+      "createdAt": {
+        "$date": "2026-09-22T20:15:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d41004"
+      },
+      "productId": {
+        "$numberInt": "4"
+      },
+      "productName": "Колонки DeskBeat 2.0",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40003"
+        },
+        "displayName": "Марія"
+      },
+      "rating": {
+        "$numberInt": "3"
+      },
+      "text": "Звук нормальний, але басу замало.",
+      "createdAt": {
+        "$date": "2026-10-06T11:00:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d41005"
+      },
+      "productId": {
+        "$numberInt": "1"
+      },
+      "productName": "Клавіатура Aurora 75 (алюміній)",
+      "productType": "Keyboard",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40004"
+        },
+        "displayName": "Тарас Б."
+      },
+      "rating": {
+        "$numberInt": "4"
+      },
+      "text": "Дуже добра, але ціна з опціями виходить відчутна.",
+      "cons": [
+        "Ціна з Holy Panda + Retro Beige"
+      ],
+      "verifiedPurchase": false,
+      "helpfulVotes": {
+        "$numberInt": "1"
+      },
+      "comments": [],
+      "createdAt": {
+        "$date": "2026-10-02T16:45:00.000Z"
+      }
+    }
+  ],
+  "discussions": [
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d42001"
+      },
+      "reviewId": {
+        "$oid": "66f0c2a1e4b0a1b2c3d41001"
+      },
+      "productId": {
+        "$numberInt": "1"
+      },
+      "title": "Aurora 75: Holy Panda чи Gateron Red?",
+      "isClosed": false,
+      "messageCount": {
+        "$numberInt": "3"
+      },
+      "lastMessageAt": {
+        "$date": "2026-09-16T19:40:00.000Z"
+      },
+      "messages": [
+        {
+          "author": {
+            "profileId": {
+              "$oid": "66f0c2a1e4b0a1b2c3d40004"
+            },
+            "displayName": "Тарас Б."
+          },
+          "text": "Для друку багато тексту що краще — Holy Panda чи лінійні?",
+          "createdAt": {
+            "$date": "2026-09-15T17:00:00.000Z"
+          }
+        },
+        {
+          "author": {
+            "profileId": {
+              "$oid": "66f0c2a1e4b0a1b2c3d40001"
+            },
+            "displayName": "Олена К."
+          },
+          "text": "Мені тактильні зручніші: менше помилок при наборі.",
+          "replyTo": {
+            "$numberInt": "0"
+          },
+          "createdAt": {
+            "$date": "2026-09-15T18:20:00.000Z"
+          }
+        },
+        {
+          "author": {
+            "displayName": "Гість"
+          },
+          "text": "Gateron Red тихіші, якщо працюєте в офісі.",
+          "createdAt": {
+            "$date": "2026-09-16T19:40:00.000Z"
+          }
+        }
+      ]
+    }
+  ],
+  "builds": [
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d43001"
+      },
+      "title": "Retro beige desk",
+      "description": "Сетап у кольорах старих ПК",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40001"
+        },
+        "displayName": "Олена К."
+      },
+      "items": [
+        {
+          "productId": {
+            "$numberInt": "1"
+          },
+          "productName": "Клавіатура Aurora 75 (алюміній)",
+          "productType": "Keyboard",
+          "customization": {
+            "switches": "Holy Panda",
+            "keycaps": "Retro Beige",
+            "caseColor": "Silver"
+          }
+        },
+        {
+          "productId": {
+            "$numberInt": "5"
+          },
+          "productName": "Килимок Canvas XL 900×400",
+          "productType": "Mousepad",
+          "customization": {
+            "size": "900×400",
+            "printUrl": "prints/olena-retro.png"
+          }
+        },
+        {
+          "productId": {
+            "$numberInt": "7"
+          },
+          "productName": "Кабель Coil USB-C",
+          "productType": "Accessory",
+          "customization": {
+            "length": "1.5 м",
+            "connector": "GX16"
+          }
+        }
+      ],
+      "tags": [
+        "retro",
+        "beige",
+        "75%"
+      ],
+      "photos": [
+        "builds/retro-1.jpg",
+        "builds/retro-2.jpg",
+        "builds/retro-3.jpg"
+      ],
+      "likes": {
+        "$numberInt": "42"
+      },
+      "createdAt": {
+        "$date": "2026-09-18T12:00:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d43002"
+      },
+      "title": "Minimal white 60%",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40002"
+        },
+        "displayName": "Andrii_M"
+      },
+      "items": [
+        {
+          "productId": {
+            "$numberInt": "8"
+          },
+          "productName": "Клавіатура Pocket 60 Hot-Swap",
+          "productType": "Keyboard",
+          "customization": {
+            "switches": "Kailh Box White",
+            "plate": "FR4"
+          }
+        },
+        {
+          "productId": {
+            "$numberInt": "2"
+          },
+          "productName": "Миша Glide Pro",
+          "productType": "Mouse",
+          "customization": {
+            "caseColor": "Lilac",
+            "coating": "Matte",
+            "dpi": {
+              "$numberInt": "1600"
+            }
+          },
+          "note": "чекаю з виготовлення"
+        }
+      ],
+      "tags": [
+        "minimal",
+        "60%",
+        "white"
+      ],
+      "likes": {
+        "$numberInt": "17"
+      },
+      "createdAt": {
+        "$date": "2026-09-25T09:30:00.000Z"
+      }
+    },
+    {
+      "_id": {
+        "$oid": "66f0c2a1e4b0a1b2c3d43003"
+      },
+      "title": "Audio corner",
+      "author": {
+        "profileId": {
+          "$oid": "66f0c2a1e4b0a1b2c3d40003"
+        },
+        "displayName": "Марія"
+      },
+      "items": [
+        {
+          "productId": {
+            "$numberInt": "3"
+          },
+          "productName": "Навушники Studio Wave",
+          "productType": "Headphones",
+          "customization": {
+            "earpads": "Leather",
+            "engraving": "M.S."
+          }
+        },
+        {
+          "productId": {
+            "$numberInt": "4"
+          },
+          "productName": "Колонки DeskBeat 2.0",
+          "productType": "Speakers",
+          "note": "на підставках під кутом 15°"
+        }
+      ],
+      "tags": [
+        "audio"
+      ],
+      "likes": {
+        "$numberInt": "5"
+      },
+      "createdAt": {
+        "$date": "2026-10-07T20:00:00.000Z"
+      }
+    }
+  ]
+}

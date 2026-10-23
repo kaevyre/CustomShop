@@ -1,0 +1,92 @@
+// Проєкт №1 — CustomShop_Orders. Вставити на https://dbdiagram.io/d
+
+Project CustomShop_Orders {
+  database_type: 'SQL Server'
+  Note: 'Контекст «Замовлення». Products — локальна копія довідника Каталогу (без FK на іншу БД).'
+}
+
+Table Customers {
+  Id bigint [pk, increment]
+  Email nvarchar(256) [not null, note: 'UNIQUE серед IsDeleted = 0']
+  FullName nvarchar(200) [not null]
+  Phone nvarchar(20)
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+  RowVersion rowversion
+  indexes {
+    Email [unique, name: 'UX_Customers_Email']
+    FullName [name: 'IX_Customers_FullName']
+  }
+}
+
+Table Products {
+  Id bigint [pk, note: 'той самий Id, що в Каталозі']
+  Sku nvarchar(50) [not null, unique]
+  Name nvarchar(200) [not null]
+  Price decimal(18,2) [not null, note: 'CHECK > 0']
+  Stock int [not null, default: 0, note: 'CHECK >= 0']
+  IsActive bit [not null, default: 1]
+  SyncedAt datetime2 [not null]
+  RowVersion rowversion
+}
+
+Table Orders {
+  Id bigint [pk, increment]
+  CustomerId bigint [not null, ref: > Customers.Id]
+  Status nvarchar(30) [not null, default: 'Submitted', note: 'CHECK: Submitted | AwaitingValidation | StockConfirmed | Paid | InProduction | Shipped | Cancelled']
+  OrderDate datetime2 [not null]
+  PaidAt datetime2
+  ShippedAt datetime2
+  CreatedAt datetime2 [not null]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+  RowVersion rowversion
+  indexes {
+    (CustomerId, Status, OrderDate) [name: 'IX_Orders_CustomerId_Status']
+    (Status, OrderDate) [name: 'IX_Orders_Status_OrderDate']
+  }
+}
+
+Table OrderDetails {
+  OrderId bigint [pk, ref: - Orders.Id, note: '1:1, ON DELETE CASCADE']
+  RecipientName nvarchar(200) [not null]
+  Phone nvarchar(20) [not null]
+  City nvarchar(100) [not null]
+  ShippingAddress nvarchar(400) [not null]
+  DeliveryMethod nvarchar(20) [not null, default: 'NovaPoshta']
+  EngravingText nvarchar(50)
+  Comment nvarchar(1000)
+  UpdatedAt datetime2
+}
+
+Table OrderItems {
+  Id bigint [pk, increment]
+  OrderId bigint [not null, ref: > Orders.Id, note: 'ON DELETE CASCADE']
+  ProductId bigint [not null, ref: > Products.Id]
+  ProductName nvarchar(200) [not null, note: 'знімок, не оновлюється']
+  UnitPrice decimal(18,2) [not null, note: 'знімок, CHECK > 0']
+  Units int [not null, note: 'CHECK 1..50']
+  Discount decimal(18,2) [not null, default: 0, note: 'CHECK 0..UnitPrice']
+  CreatedAt datetime2 [not null]
+  indexes {
+    OrderId [name: 'IX_OrderItems_OrderId']
+    ProductId [name: 'IX_OrderItems_ProductId']
+  }
+}
+
+Table OrderItemOptions {
+  Id bigint [pk, increment]
+  OrderItemId bigint [not null, ref: > OrderItems.Id, note: 'ON DELETE CASCADE']
+  OptionId bigint [not null, note: 'Id опції в Каталозі, без FK']
+  OptionGroup nvarchar(100) [not null, note: 'знімок']
+  OptionValue nvarchar(200) [not null, note: 'знімок']
+  PriceDelta decimal(18,2) [not null, default: 0, note: 'знімок, CHECK >= 0']
+  indexes {
+    (OrderItemId, OptionGroup) [unique, name: 'UQ_OrderItemOptions_Item_Group']
+  }
+}
