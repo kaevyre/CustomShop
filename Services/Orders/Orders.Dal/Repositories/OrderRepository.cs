@@ -38,19 +38,16 @@ public sealed class OrderRepository : BaseDapperRepository<Order>, IOrderReposit
     {
         var connection = await Session.GetConnectionAsync(ct);
 
-        // Перевантаження multi-mapping у Dapper не приймає CommandDefinition, тому токен скасування тут не передається
         return await GuardAsync(async () =>
         {
             var rows = await connection.QueryAsync<Order, OrderDetails?, Customer, Order>(
-                SelectWithDetailsSql,
+                Command(SelectWithDetailsSql, new { Id = id }, ct),
                 (order, details, customer) =>
                 {
                     order.Details = details is { OrderId: not 0 } ? details : null;
                     order.Customer = customer;
                     return order;
                 },
-                new { Id = id },
-                Session.Transaction,
                 splitOn: "OrderId,Id");
 
             return rows.FirstOrDefault();

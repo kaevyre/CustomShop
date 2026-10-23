@@ -40,9 +40,8 @@ public sealed class OrderItemRepository : BaseDapperRepository<OrderItem>, IOrde
             var lookup = new Dictionary<long, OrderItem>();
             var ordered = new List<OrderItem>();
 
-            // multi-mapping у Dapper не приймає CommandDefinition, тому токен скасування тут не передається
             await connection.QueryAsync<OrderItem, OrderItemOption?, OrderItem>(
-                SelectWithOptionsSql,
+                Command(SelectWithOptionsSql, new { OrderId = orderId }, ct),
                 (item, option) =>
                 {
                     if (!lookup.TryGetValue(item.Id, out var existing))
@@ -57,8 +56,6 @@ public sealed class OrderItemRepository : BaseDapperRepository<OrderItem>, IOrde
 
                     return existing;
                 },
-                new { OrderId = orderId },
-                Session.Transaction,
                 splitOn: "Id");
 
             return (IReadOnlyList<OrderItem>)ordered;

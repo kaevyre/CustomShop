@@ -27,4 +27,12 @@ builder.AddProject<Projects.Orders_Api>("orders-api")
     .WaitFor(ordersDb)
     .WithHttpHealthCheck("/health");
 
+// Каталог (Лаб. 03): схему створюють міграції EF Core, сідінг — сам Catalog.Api на старті.
+var catalogDb = sql.AddDatabase("CatalogDb", "CustomShop_Catalog");
+
+builder.AddProject<Projects.Catalog_Api>("catalog-api")
+    .WithReference(catalogDb)
+    .WaitFor(catalogDb)
+    .WithHttpHealthCheck("/health");
+
 builder.Build().Run();
