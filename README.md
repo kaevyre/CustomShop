@@ -400,3 +400,140 @@ curl -X POST $API/api/customers -H "Content-Type: application/json" \
 | `POST /api/orders`, `GET /api/orders/{id}` | оформлення замовлення в одній транзакції; перегляд із покупцем, доставкою, позиціями й опціями |
 | `POST /api/orders/{id}/status` | зміна статусу (`usp_ChangeOrderStatus`: переходи, склад, RowVersion) |
 | `GET /api/orders/statistics` | кількість і сума замовлень за статусами (`vw_OrderSummary`) |
+
+---
+
+# Лаб. 03 — мікросервіс «Каталог» на EF Core (Code-First)
+
+Проєкт №2 з Лаб. 01: та сама схема `CustomShop_Catalog`, але тепер її створюють міграції з моделей. Структура шарів — як у Лаб. 02.
+
+## Структура
+
+```
+Services/Catalog/
+  Catalog.Domain/   сутності з бізнес-правилами (Product, Category, Brand, ProductCategory, ProductSpecification,
+                    CustomizationOption), доменні винятки
+  Catalog.Dal/      CatalogDbContext, Configurations/ (IEntityTypeConfiguration<T>), Migrations/ (+ InitialCreate.sql),
+                    Interfaces/, Repositories/, UnitOfWork, Seeding/ (HasData-дані, DbInitializer)
+  Catalog.Bll/      сервіси, Dtos/, Mapping/ (AutoMapper), Validation/ (FluentValidation), Specifications/, Caching/
+  Catalog.Api/      контролери, Program.cs (Serilog, міграції, сідінг), Middleware/ (обробник помилок, CorrelationId), Dockerfile
+```
+
+| Що | Де |
+|---|---|
+| Сутності з приватними setter-ами; ціна перевіряється в конструкторі й `ChangePrice`, залишок змінюється лише `AddStock` / `RemoveStock` | `Catalog.Domain/Entities/Product.cs` |
+| Окрема конфігурація на кожну сутність, підключені через `ApplyConfigurationsFromAssembly` | `Catalog.Dal/Configurations/`, `CatalogDbContext.OnModelCreating` |
+| 1:1 Product ↔ ProductSpecification (PK = FK), 1:N Product → CustomizationOptions, N:1 Product → Brand, M:N через `ProductCategory` зі складеним ключем і полями `AddedAt`, `IsFeatured` | `Configurations/ProductConfiguration.cs`, `ProductCategoryConfiguration.cs` |
+| Async Generic Repository на `DbSet<T>`; Unit of Work з єдиним `SaveChangesAsync` | `Repositories/GenericRepository.cs`, `UnitOfWork.cs` |
+| Eager Loading (`Include` / `ThenInclude`, один SQL-запит) | `ProductRepository.GetWithDetailsAsync` |
+| Explicit Loading (`Entry(...).Collection(...).Query().LoadAsync`, два запити) | `CategoryRepository.GetWithProductsAsync` |
+| LINQ to Entities через проміжну сутність M:N | `ProductCategoryRepository.GetRecentlyAddedAsync` |
+| Specification pattern (Ardalis.Specification) | `Catalog.Bll/Specifications/` → `GenericRepository.ListAsync / CountAsync` (`WithSpecification`) |
+
+## Міграції
+
+Інструмент `dotnet-ef` підключений як локальний (`.config/dotnet-tools.json`), тож достатньо відновити його в корені репозиторію:
+
+```bash
+dotnet tool restore
+dotnet ef migrations add <Name> --project Services/Catalog/Catalog.Dal --startup-project Services/Catalog/Catalog.Api
+dotnet ef database update --project Services/Catalog/Catalog.Dal --startup-project Services/Catalog/Catalog.Api
+dotnet ef migrations script --idempotent --project Services/Catalog/Catalog.Dal --startup-project Services/Catalog/Catalog.Api
+```
+
+Початкова міграція — `Services/Catalog/Catalog.Dal/Migrations/*_InitialCreate.cs`, згенерований SQL — `Migrations/InitialCreate.sql`. Імена таблиць, ключів, CHECK-обмежень та індексів збігаються з `db/p2/schema.sql`.
+
+Окремо `database update` запускати не обов'язково: `Catalog.Api` сам виконує `MigrateAsync()` на старті.
+
+> Якщо базу `CustomShop_Catalog` раніше створено скриптом `db/p2/schema.sql` (Лаб. 01), видаліть її перед першим запуском: таблиці вже існують, а історії міграцій немає. Далі схемою керують лише міграції.
+
+## Запуск
+
+Через Aspire (разом із сервісом Замовлень, потрібен Docker Desktop):
+
+```bash
+dotnet run --project Platform.AppHost --launch-profile http
+```
+
+AppHost створює на тому самому SQL Server базу `CatalogDb` (`CustomShop_Catalog`) і передає її в `catalog-api` через `WithReference`.
+
+Окремо: підніміть SQL Server (`docker compose -f db/docker-compose.yml up -d`) і виконайте
+
+```bash
+dotnet run --project Services/Catalog/Catalog.Api --launch-profile http
+```
+
+Swagger: http://localhost:5081/swagger. Рядок підключення — `ConnectionStrings:CatalogDb` в `Services/Catalog/Catalog.Api/appsettings.json` або змінна `ConnectionStrings__CatalogDb`.
+
+## Початкові дані
+
+- **Статичний сідінг (`HasData`)**: Brands, Categories, Products, CustomizationOptions з фіксованими Id (ці Id копіюють Замовлення і Відгуки). Потрапляють у міграцію.
+- **Програмний сідінг** (`Seeding/DbInitializer.cs`, після `MigrateAsync`): специфікації товарів і зв'язки товар–категорія. Перед вставкою перевіряє, які записи вже є, тож повторний запуск нічого не дублює.
+- Програмний сідінг вимкнений у Production; примусово вимкнути — `Database__Seed=false`.
+
+## Пагінація, фільтрація, сортування
+
+`GET /api/products?page=1&pageSize=20&search=&brandId=&categoryId=&productType=&minPrice=&maxPrice=&isCustomizable=&sortBy=name&sortDir=asc`
+
+- `pageSize` за замовчуванням 20, максимум 100; `sortBy`: `name`, `price`, `stock`, `created`; `sortDir`: `asc` / `desc`.
+- Фільтри, сортування і `Skip/Take` збирає специфікація `ProductsFilterSpec`; у БД іде `SELECT COUNT(*)` і один `SELECT … ORDER BY … OFFSET … FETCH`.
+- Відповідь: `{ items, totalCount, page, pageSize, totalPages, hasNext, hasPrevious }`; `totalCount` і `totalPages` також є в заголовках `X-Total-Count`, `X-Total-Pages`.
+
+## Валідація й помилки
+
+- Прості правила — DataAnnotations на DTO (`[Required]`, `[StringLength]`, `[Range]`), їх перевіряє `[ApiController]`.
+- Формати й перехресні правила — валідатори FluentValidation (`Catalog.Bll/Validation`), зареєстровані `AddValidatorsFromAssemblyContaining` і викликані явно в контролерах.
+- В обох випадках відповідь — 400 `ValidationProblemDetails` з помилками за полями.
+
+| Виняток | HTTP |
+|---|---|
+| `EntityNotFoundException` | 404 |
+| `ValidationException` | 400 |
+| `ConflictException` (дубль SKU/slug, застарілий RowVersion, UNIQUE/FK у БД) | 409 |
+| `DomainException` (правило сутності: ціна ≤ 0, недостатній залишок) | 409 |
+| інше | 500, текст помилки лише в Development |
+
+Обробник — `Catalog.Api/Middleware/GlobalExceptionHandler.cs`; виняток логується один раз, саме там.
+
+## Логування (Serilog)
+
+- Налаштування — секція `Serilog` в `appsettings.json`; sink — консоль.
+- Кожен запис має `CorrelationId` (заголовок `X-Correlation-Id` або TraceIdentifier), `RequestPath`, `UserId`, `Service`; підсумок запиту пише `UseSerilogRequestLogging`.
+- SQL-команди EF Core логуються на рівні Information (`Microsoft.EntityFrameworkCore.Database.Command`). Перевірка: `GET /api/products/1` (eager) дає один `Executed DbCommand`, `GET /api/categories/1` (explicit) — два.
+
+## Ендпоїнти й приклади
+
+| Метод і шлях | Відповіді |
+|---|---|
+| `GET /api/products` | 200 (сторінка), 400 |
+| `GET /api/products/{id}` | 200 (eager: бренд, специфікація, опції, категорії), 404 |
+| `POST /api/products` | 201 + Location, 400, 404 (бренд), 409 (SKU/slug) |
+| `PUT /api/products/{id}/price` | 200, 400, 404, 409 (RowVersion) |
+| `POST /api/products/{id}/stock/add`, `/stock/remove` | 200, 404, 409 (недостатньо) |
+| `POST /api/products/{id}/categories`, `DELETE /api/products/{id}/categories/{categoryId}` | 204, 404, 409 |
+| `DELETE /api/products/{id}` | 204 (м'яке видалення), 404 |
+| `GET /api/categories`, `GET /api/categories/{id}` | 200 (explicit loading), 404 |
+| `GET /api/categories/{id}/recent-products?since=&featuredOnly=` | 200 (LINQ M:N), 400, 404 |
+| `POST /api/categories`, `DELETE /api/categories/{id}` | 201, 204, 409 |
+| `GET /api/brands`, `GET /api/brands/{id}/products?page=&pageSize=` | 200 (друга специфікація), 404 |
+
+```bash
+API=http://localhost:5081   # з Aspire — адреса catalog-api з Dashboard
+
+curl "$API/api/products?page=2&pageSize=5"
+curl "$API/api/products?productType=Keyboard&sortBy=price&sortDir=desc"
+
+# 201 + Location; повтор із тим самим SKU → 409
+curl -i -X POST $API/api/products -H "Content-Type: application/json" \
+  -d '{"brandId":1,"sku":"KB-065-TEST","name":"Test Keyboard 65","slug":"test-keyboard-65","productType":"Keyboard","basePrice":3200,"initialStock":5}'
+
+# 400 з помилками за полями
+curl -i -X POST $API/api/products -H "Content-Type: application/json" -d '{"brandId":1,"sku":"KB-1","name":"","slug":"x","productType":"Mouse","basePrice":10}'
+
+# 409: залишку не вистачає (правило сутності)
+curl -i -X POST $API/api/products/4/stock/remove -H "Content-Type: application/json" -d '{"quantity":500}'
+
+curl "$API/api/categories/1"                                   # explicit loading
+curl "$API/api/categories/7/recent-products?since=2026-06-15"  # M:N з полями AddedAt / IsFeatured
+curl "$API/api/brands/1/products?page=1&pageSize=2"            # друга специфікація
+```
