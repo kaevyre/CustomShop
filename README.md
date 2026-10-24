@@ -537,3 +537,162 @@ curl "$API/api/categories/1"                                   # explicit loadin
 curl "$API/api/categories/7/recent-products?since=2026-06-15"  # M:N з полями AddedAt / IsFeatured
 curl "$API/api/brands/1/products?page=1&pageSize=2"            # друга специфікація
 ```
+
+---
+
+# Лаб. 04 — мікросервіс «Відгуки»: Clean Architecture + CQRS (MediatR) + MongoDB
+
+Проєкт №3 з Лаб. 01: БД `customshop_reviews`, колекції `reviews` і `builds` з тією самою структурою документів (camelCase, вкладені `author`, `comments[]`, `items[]`, `customization`).
+
+## Схема шарів
+
+```
+            ┌───────────────────────────────┐
+            │ Reviews.WebApi (Presentation) │  контролери → ISender, ProblemDetails, Swagger, Program.cs
+            └──────┬─────────────────┬──────┘
+                   │                 │ (лише для DI на старті)
+                   ▼                 ▼
+ ┌────────────────────────┐   ┌───────────────────────────────┐
+ │ Reviews.Application    │◄──│ Reviews.Infrastructure        │  MongoDbContext, BsonClassMap, репозиторії,
+ │ команди, запити,       │   │ (реалізує інтерфейси          │  IReviewQueries/IBuildQueries, індекси, сідінг
+ │ behaviors, валідатори, │   │  Application і Domain)        │
+ │ IReviewQueries, DTO    │   └──────────────┬────────────────┘
+ └──────────┬─────────────┘                  │
+            ▼                                ▼
+ ┌──────────────────────────────────────────────────────────┐
+ │ Reviews.Domain — сутності, Value Objects, винятки,       │  жодних посилань на інші проєкти;
+ │ IReviewRepository / IBuildRepository                     │  із пакетів — лише MongoDB.Bson (ObjectId)
+ └──────────────────────────────────────────────────────────┘
+```
+
+| Проєкт | Посилання | Пакети |
+|---|---|---|
+| `Reviews.Domain` | — | `MongoDB.Bson` |
+| `Reviews.Application` | Domain | `MediatR` 12.5, `FluentValidation`, `AutoMapper` 14.0 |
+| `Reviews.Infrastructure` | Application, Domain | `MongoDB.Driver`, `MongoDB.Bson`, `Microsoft.Extensions.Options.ConfigurationExtensions` |
+| `Reviews.WebApi` | Application, Infrastructure | `Swashbuckle.AspNetCore`, `Serilog.AspNetCore` |
+| `Reviews.Domain.Tests` | Domain | xUnit: доменні правила без БД |
+
+MediatR 12.5 і AutoMapper 14.0 — останні версії під відкритою ліцензією, тож ключ Lucky Penny не потрібен.
+
+## Структура
+
+```
+Services/Reviews/
+  Reviews.Domain/          Common/ (BaseEntity, ValueObject), Entities/ (Review, Comment, Build),
+                           ValueObjects/ (Author, Rating, BuildItem), Enums/, Exceptions/, Interfaces/ (репозиторії)
+  Reviews.Application/     Common/Behaviors/ (Logging, UnhandledException, Validation, Performance),
+                           Common/Interfaces/ (ICommand, IQuery, IReviewQueries, IBuildQueries),
+                           Common/Models/ (PagedResult, CursorPage), Common/Mappings/ (AutoMapper),
+                           Common/Validation/ (ObjectId, BSON-піддокумент),
+                           Reviews/Commands|Queries/..., Builds/Commands|Queries/..., DependencyInjection.cs
+  Reviews.Infrastructure/  Persistence/ (MongoDbContext, MongoMappings, Serialization/, Repositories/, Queries/,
+                           ReadModels/, MongoHealthCheck), Seeding/ (IndexCreationService, IDataSeeder + сідери),
+                           DependencyInjection.cs
+  Reviews.WebApi/          Controllers/ (ApiControllerBase, Reviews, Builds), Contracts/, Mapping/,
+                           Infrastructure/GlobalExceptionHandler.cs, DependencyInjection.cs, Program.cs,
+                           appsettings.{Development,Staging,Production}.json
+  Reviews.Domain.Tests/    unit-тести домену
+```
+
+## Де що реалізовано
+
+| Критерій | Де |
+|---|---|
+| 4 шари, правильні залежності | `*.csproj` (таблиця вище), `Platform.slnx` |
+| `BaseEntity` (Id: ObjectId, CreatedAt, UpdatedAt, Version), інкапсуляція | `Domain/Common/BaseEntity.cs`; `Review` і `Build` мають приватні setter-и та приватні поля колекцій, стан змінюють методи `Update`, `AddComment`, `AddItem`, `Like`…; порушення правил → `DomainException` |
+| `ValueObject` + 3 VO | `Domain/Common/ValueObject.cs` (`GetEqualityComponents`); `Author` (вкладений `author`), `Rating` (int 1–5), `BuildItem` (елемент `items[]`): без setter-ів, валідація в конструкторі |
+| Інтерфейси доступу до даних у внутрішніх шарах | `Domain/Interfaces/IReviewRepository.cs`, `IBuildRepository.cs`; `Application/Common/Interfaces/IReviewQueries.cs`, `IBuildQueries.cs` |
+| Команди з окремими обробниками | `CreateReview`, `UpdateReview`, `DeleteReview`, `AddComment`; `CreateBuild`, `UpdateBuild`, `LikeBuild`, `DeleteBuild` |
+| Запити через `IReviewQueries` з пагінацією в MongoDB | `GetReviewById`, `GetReviewsList` (`$match` + `$facet` з `$skip/$limit/$project`), `GetReviewsFeed` (курсор по `_id`), `GetProductRating` (`$group`) → `Infrastructure/Persistence/Queries/ReviewQueries.cs` |
+| MediatR: сканування + порядок behaviors; DI-метод на шар | `Application/DependencyInjection.cs` (`AddApplication`), `Infrastructure/DependencyInjection.cs` (`AddInfrastructure`), `WebApi/DependencyInjection.cs` (`AddWebApi`) |
+| ValidationBehavior + FluentValidation | `Common/Behaviors/ValidationBehavior.cs` (усі помилки разом, обробник не викликається); перевірка ObjectId (`MustBeObjectId`) і структури піддокумента `customization`; асинхронне правило із запитом до MongoDB — `CreateReviewCommandValidator` («You have already reviewed this product») |
+| Logging / Performance (+ UnhandledException) behaviors | `Common/Behaviors/`: структуроване логування через Serilog; Warning, якщо обробник довший за `Performance:SlowRequestMs` |
+| MongoDbContext через IOptions, BsonClassMap без атрибутів | `Persistence/MongoDbContext.cs` (`IOptions<MongoDbOptions>`), `Persistence/MongoMappings.cs` (camelCase, приватні поля `_comments`/`_items`, VO через `MapCreator`, серіалізатори `RatingSerializer`, `CustomizationSerializer`); реєструється один раз в `AddInfrastructure` |
+| Репозиторій з оптимістичною конкурентністю | `Persistence/Repositories/MongoRepositoryBase.cs`: `ReplaceOneAsync` з фільтром `_id + version`, `MatchedCount == 0` → `ConflictException`; документи Лаб. 01 без поля `version` вважаються версією 0 |
+| Контролери лише через ISender, AutoMapper, Swagger | `Controllers/ApiControllerBase.cs` (`ISender`, `IMapper`, ETag/If-Match), `Application/Common/Mappings/MappingProfile.cs` (ObjectId → string, VO, `comments[]`, `items[]`), `WebApi/Mapping/ApiMappingProfile.cs` (запит → команда); `/swagger` |
+| ProblemDetails з MongoDB-винятками | `WebApi/Infrastructure/GlobalExceptionHandler.cs` |
+| Сідінг, індекси, конфігурація | `Seeding/DataSeeders.cs` (`IDataSeeder`, `InsertManyAsync`, пропуск непорожньої колекції), `Seeding/IndexCreationService.cs` (складені, text, unique, multikey; імена як у `collections.js`), секція `MongoDb` в `appsettings*.json`, health check `/health` |
+
+## Запуск
+
+**Через Aspire** (потрібен Docker Desktop): `dotnet run --project Platform.AppHost --launch-profile http`. AppHost піднімає контейнер `mongo` (volume `customshop-reviews-mongo`) і передає рядок підключення в `reviews-api` як `ConnectionStrings__ReviewsDb`; він має пріоритет над `MongoDb:ConnectionString`.
+
+**Окремо**: MongoDB з Лаб. 01 і API:
+
+```bash
+docker compose -f db/docker-compose.yml up -d mongodb
+dotnet run --project Services/Reviews/Reviews.WebApi --launch-profile http
+```
+
+Swagger: http://localhost:5082/swagger, health: http://localhost:5082/health.
+
+На старті `MongoInitializationHostedService` спершу створює індекси, потім запускає сідери. Непорожню колекцію (наприклад, після `db/p3/seed.js`) сідер не чіпає, тож повторний запуск дублів не створює. Вимкнути сідінг: `MongoDb__Seed=false` (у Production вимкнено). Якщо MongoDB недоступна, API все одно стартує й відповідає 503.
+
+Конфігурація (`appsettings.json`, перевизначення в `appsettings.{Environment}.json`):
+
+```json
+"MongoDb": {
+  "ConnectionString": "mongodb://localhost:27017/?maxPoolSize=50&minPoolSize=5&serverSelectionTimeoutMS=5000&connectTimeoutMS=5000",
+  "DatabaseName": "customshop_reviews",
+  "Seed": true
+}
+```
+
+Тести домену: `dotnet test Services/Reviews/Reviews.Domain.Tests`.
+
+## Ендпоїнти
+
+| Метод і шлях | Відповіді |
+|---|---|
+| `GET /api/reviews?productId=&authorProfileId=&minRating=&search=&page=&pageSize=` | 200, 400 |
+| `GET /api/reviews/feed?productId=&after=&pageSize=` | 200 (`nextCursor`), 400 |
+| `GET /api/reviews/{id}` | 200 + `ETag`, 400 (не ObjectId), 404 |
+| `GET /api/reviews/products/{productId}/rating` | 200, 404 |
+| `POST /api/reviews` | 201 + `Location: /api/reviews/{objectId}`, 400, 409 |
+| `PUT /api/reviews/{id}` (`If-Match: "N"`) | 200 + `ETag`, 400, 404, 409 |
+| `POST /api/reviews/{id}/comments` | 200, 400, 404, 409 |
+| `DELETE /api/reviews/{id}` (`If-Match` необов'язковий) | 204, 404, 409 |
+| `GET /api/builds?tag=&productId=&page=&pageSize=`, `GET /api/builds/{id}` | 200, 400, 404 |
+| `POST /api/builds`, `PUT /api/builds/{id}`, `POST /api/builds/{id}/likes`, `DELETE /api/builds/{id}` | 201 / 200 / 204, 400, 404, 409 |
+
+| Виняток | HTTP |
+|---|---|
+| `NotFoundException` | 404 |
+| `ValidationException` (FluentValidation), `DomainException` | 400 |
+| `ConflictException` / `ConcurrencyException` (застаріла версія) | 409 |
+| `MongoWriteException` / `MongoBulkWriteException` з DuplicateKey (`ux_product_author`) | 409; інші помилки запису (наприклад, JSON Schema колекції) — 400 |
+| `MongoConnectionException`, тайм-аут вибору сервера | 503 + `Retry-After` |
+
+## Демонстрація
+
+```bash
+API=http://localhost:5082
+
+# 400 ще до обробника: у лозі є «Handling CreateReviewCommand» і «rejected: ValidationException»,
+# а рядків «CreateReviewCommandHandler: creating review…» і «Handled …» немає
+curl -i -X POST $API/api/reviews -H "Content-Type: application/json" \
+  -d '{"productId":3,"productName":"Studio Wave","authorProfileId":"66f0c2a1e4b0a1b2c3d40002","authorName":"Andrii_M","rating":10,"text":"ok"}'
+
+# 201 + Location з рядковим ObjectId
+curl -i -X POST $API/api/reviews -H "Content-Type: application/json" \
+  -d '{"productId":3,"productName":"Studio Wave","productType":"Headphones","authorProfileId":"66f0c2a1e4b0a1b2c3d40002","authorName":"Andrii_M","rating":5,"text":"Leather earpads are comfy","customization":{"earpads":"Leather"},"orderId":2}'
+
+# той самий запит ще раз → 400 «You have already reviewed this product» (за гонки — 409 від унікального індексу)
+
+# конфлікт версій: два PUT з If-Match: "0" — перший 200 (ETag "1"), другий 409
+curl -i -X PUT $API/api/reviews/<id> -H 'If-Match: "0"' -H "Content-Type: application/json" \
+  -d '{"rating":4,"text":"Updated after a week"}'
+
+curl -i $API/api/reviews/66f0c2a1e4b0a1b2c3d4ffff     # 404
+curl -i $API/api/reviews/not-an-id                    # 400
+```
+
+Перевірка в `mongosh`:
+
+```js
+use customshop_reviews
+db.reviews.find().limit(1)     // camelCase, вкладені author / comments, без полів _comments чи _t
+db.reviews.getIndexes()        // _id_, ix_product_createdAt, ix_author_createdAt, ux_product_author, tx_title_text
+db.builds.getIndexes()         // _id_, ix_items_productId, ix_tags_likes
+```
