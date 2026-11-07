@@ -35,4 +35,14 @@ builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WaitFor(catalogDb)
     .WithHttpHealthCheck("/health");
 
+// Відгуки (Лаб. 04): MongoDB у контейнері з постійним volume; індекси й seed створює сам reviews-api на старті.
+var mongo = builder.AddMongoDB("mongo")
+    .WithDataVolume("customshop-reviews-mongo");
+var reviewsDb = mongo.AddDatabase("ReviewsDb", "customshop_reviews");
+
+builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+    .WithReference(reviewsDb)
+    .WaitFor(reviewsDb)
+    .WithHttpHealthCheck("/health");
+
 builder.Build().Run();
