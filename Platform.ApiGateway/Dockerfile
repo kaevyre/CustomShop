@@ -1,0 +1,18 @@
+# Збірка з кореня репозиторію:  docker build -f Platform.ApiGateway/Dockerfile -t api-gateway .
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+
+COPY Platform.ServiceDefaults/Platform.ServiceDefaults.csproj Platform.ServiceDefaults/
+COPY Platform.ApiGateway/Platform.ApiGateway.csproj Platform.ApiGateway/
+RUN dotnet restore Platform.ApiGateway/Platform.ApiGateway.csproj
+
+COPY Platform.ServiceDefaults/ Platform.ServiceDefaults/
+COPY Platform.ApiGateway/ Platform.ApiGateway/
+RUN dotnet publish Platform.ApiGateway/Platform.ApiGateway.csproj -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
+WORKDIR /app
+COPY --from=build /app/publish .
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Platform.ApiGateway.dll"]

@@ -7,6 +7,7 @@ using Orders.Dal.Infrastructure;
 using Orders.Dal.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddServiceDefaults();                 // Лаб. 05: Serilog, OpenTelemetry, health checks, service discovery
 
 // Рядок підключення: appsettings.json або змінна середовища ConnectionStrings__OrdersDb (її передає Aspire через WithReference)
 var connectionString = builder.Configuration.GetConnectionString("OrdersDb")
@@ -36,16 +37,15 @@ builder.Services.AddProblemDetails(options =>
         context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 
-builder.Services.AddHealthChecks();
-
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();  // X-Correlation-Id → LogContext і заголовок відповіді
 app.UseExceptionHandler();
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();                     // /health і /alive
 app.MapControllers();
 
 app.Run();

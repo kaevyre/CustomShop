@@ -1,6 +1,8 @@
 using System.Data;
 using AutoMapper;
+using Microsoft.Extensions.Logging;
 using Orders.Bll.Dtos;
+using Orders.Bll.Telemetry;
 using Orders.Bll.Validation;
 using Orders.Dal.Abstractions;
 using Orders.Domain.Exceptions;
@@ -14,11 +16,13 @@ public sealed class OrderService : IOrderService
 
     private readonly IUnitOfWork _uow;
     private readonly IMapper _mapper;
+    private readonly ILogger<OrderService> _logger;
 
-    public OrderService(IUnitOfWork uow, IMapper mapper)
+    public OrderService(IUnitOfWork uow, IMapper mapper, ILogger<OrderService> logger)
     {
         _uow = uow;
         _mapper = mapper;
+        _logger = logger;
     }
 
     public async Task<OrderDto> GetAsync(long id, CancellationToken ct = default)
@@ -58,6 +62,10 @@ public sealed class OrderService : IOrderService
 
     public async Task<OrderDto> PlaceAsync(CreateOrderDto dto, CancellationToken ct = default)
     {
+        using var activity = OrdersTelemetry.Source.StartActivity("PlaceOrder");
+        activity?.SetTag("customer.id", dto.CustomerId);
+        activity?.SetTag("order.items", dto.Items.Count);
+
         // Рівень 2 валідації (рівень 1 — атрибути DataAnnotations на DTO, їх перевіряє [ApiController])
         OrderRules.EnsureValid(dto);
 
@@ -103,7 +111,12 @@ public sealed class OrderService : IOrderService
             return newOrderId;
         }, IsolationLevel.ReadCommitted, ct);
 
-        return await GetAsync(orderId, ct);
+        var placed = await GetAsync(orderId, ct);
+        activity?.SetTag("order.id", orderId);
+        _logger.LogInformation(
+            "Order {OrderId} placed by customer {CustomerId}: {ItemsCount} items, amount {Amount}, status {Status}",
+            orderId, dto.CustomerId, placed.Items.Count, placed.TotalAmount, placed.Status);
+        return placed;
     }
 
     public async Task<OrderStatusResultDto> ChangeStatusAsync(
@@ -117,6 +130,10 @@ public sealed class OrderService : IOrderService
             });
         }
 
+        using var activity = OrdersTelemetry.Source.StartActivity("ChangeOrderStatus");
+        activity?.SetTag("order.id", id);
+        activity?.SetTag("order.status.new", dto.NewStatus);
+
         var expectedRowVersion = RequestRules.ParseRowVersion(dto.RowVersion);
 
         var order = await _uow.Orders.GetByIdAsync(id, ct)
@@ -124,12 +141,16 @@ public sealed class OrderService : IOrderService
 
         if (!OrderStatus.CanTransition(order.Status, dto.NewStatus))
         {
+            _logger.LogWarning("Order {OrderId}: transition {OldStatus} -> {Status} rejected",
+                id, order.Status, dto.NewStatus);
             throw new BusinessConflictException(
                 $"Transition {order.Status} -> {dto.NewStatus} is not allowed. " +
                 $"Allowed from {order.Status}: {FormatNext(order.Status)}.");
         }
 
         var result = await _uow.Orders.ChangeStatusAsync(id, dto.NewStatus, expectedRowVersion, Actor, ct);
+        _logger.LogInformation("Order {OrderId} status changed {OldStatus} -> {Status}",
+            id, order.Status, result.Status);
         return _mapper.Map<OrderStatusResultDto>(result);
     }
 

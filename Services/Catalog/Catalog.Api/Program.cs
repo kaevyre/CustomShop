@@ -9,18 +9,10 @@ using Catalog.Dal.Seeding;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Serilog: рівні — у секції "Serilog" appsettings.json; структуровані властивості виводяться в {Properties}
-builder.Host.UseSerilog((context, services, configuration) => configuration
-    .ReadFrom.Configuration(context.Configuration)
-    .ReadFrom.Services(services)
-    .Enrich.FromLogContext()
-    .Enrich.WithProperty("Service", "catalog-api")
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}{NewLine}  {Message:lj} {Properties:j}{NewLine}{Exception}"));
+// Лаб. 05: Serilog (рівні — як і раніше, із секції "Serilog" appsettings.json), OpenTelemetry, health checks
+builder.AddServiceDefaults();
 
 // Рядок підключення: appsettings.json або змінна середовища ConnectionStrings__CatalogDb (її передає Aspire)
 var connectionString = builder.Configuration.GetConnectionString("CatalogDb")
@@ -49,8 +41,6 @@ builder.Services.AddProblemDetails(options =>
         context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-builder.Services.AddHealthChecks();
-
 var app = builder.Build();
 
 // Міграції й сідінг. Сідінг вимикається в production або змінною Database__Seed=false.
@@ -63,19 +53,13 @@ await using (var scope = app.Services.CreateAsyncScope())
         await DbInitializer.SeedAsync(db, app.Logger);
 }
 
-app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseSerilogRequestLogging(options =>
-    options.EnrichDiagnosticContext = (diagnostic, http) =>
-    {
-        diagnostic.Set("RequestPath", http.Request.Path.Value ?? string.Empty);
-        diagnostic.Set("UserId", http.User.Identity?.IsAuthenticated == true ? http.User.Identity.Name ?? "unknown" : "anonymous");
-    });
+app.UseMiddleware<CorrelationIdMiddleware>();  // спільний middleware з ServiceDefaults (межі запиту + CorrelationId)
 app.UseExceptionHandler();
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();                     // /health і /alive
 app.MapControllers();
 
 app.Run();

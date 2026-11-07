@@ -1,18 +1,10 @@
 using Reviews.Application;
 using Reviews.Infrastructure;
 using Reviews.WebApi;
-using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Serilog: рівні — у секції "Serilog" appsettings.json; структуровані властивості ({@Request}) виводяться в {Properties}
-builder.Host.UseSerilog((context, services, configuration) => configuration
-    .ReadFrom.Configuration(context.Configuration)
-    .ReadFrom.Services(services)
-    .Enrich.FromLogContext()
-    .Enrich.WithProperty("Service", "reviews-api")
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}{NewLine}  {Message:lj} {Properties:j}{NewLine}{Exception}"));
+// Лаб. 05: Serilog (рівні — із секції "Serilog" appsettings.json), OpenTelemetry, health checks, service discovery
+builder.AddServiceDefaults();
 
 // кожен шар реєструє свої залежності власним методом розширення
 builder.Services
@@ -22,13 +14,13 @@ builder.Services
 
 var app = builder.Build();
 
-app.UseSerilogRequestLogging();
+app.UseMiddleware<CorrelationIdMiddleware>();  // X-Correlation-Id → LogContext і заголовок відповіді
 app.UseExceptionHandler();
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();                     // /health і /alive (включно з перевіркою MongoDB)
 app.MapControllers();
 
 app.Run();

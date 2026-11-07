@@ -15,4 +15,9 @@
     <ProjectReference Include="..\Orders.Dal\Orders.Dal.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Лаб. 05: спільні налаштування платформи (Serilog, OpenTelemetry, CorrelationId, health checks) -->
+    <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
+  </ItemGroup>
+
 </Project>

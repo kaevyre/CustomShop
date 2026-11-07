@@ -4,6 +4,8 @@ using Catalog.Bll.Specifications;
 using Catalog.Dal.Interfaces;
 using Catalog.Domain.Entities;
 using Catalog.Domain.Exceptions;
+using Catalog.Bll.Telemetry;
+using Microsoft.Extensions.Logging;
 
 namespace Catalog.Bll.Services;
 
@@ -15,11 +17,13 @@ public sealed class ProductService : IProductService
 {
     private readonly IUnitOfWork _uow;
     private readonly IMapper _mapper;
+    private readonly ILogger<ProductService> _logger;
 
-    public ProductService(IUnitOfWork uow, IMapper mapper)
+    public ProductService(IUnitOfWork uow, IMapper mapper, ILogger<ProductService> logger)
     {
         _uow = uow;
         _mapper = mapper;
+        _logger = logger;
     }
 
     public async Task<PagedResult<ProductDto>> GetListAsync(ProductQuery query, CancellationToken ct = default)
@@ -39,7 +43,10 @@ public sealed class ProductService : IProductService
 
     public async Task<ProductDetailsDto> CreateAsync(CreateProductDto dto, CancellationToken ct = default)
     {
+        using var activity = CatalogTelemetry.Source.StartActivity("CreateProduct");
         var sku = dto.Sku.Trim();
+        activity?.SetTag("product.sku", sku);
+
         if (await _uow.Products.ExistsBySkuAsync(sku, ct))
             throw new ConflictException($"Product with SKU '{sku}' already exists.");
         if (await _uow.Products.ExistsBySlugAsync(dto.Slug, ct))
@@ -55,6 +62,10 @@ public sealed class ProductService : IProductService
         await _uow.Products.AddAsync(product, ct);
         await _uow.SaveChangesAsync(ct);
 
+        activity?.SetTag("product.id", product.Id);
+        _logger.LogInformation("Product {ProductId} created: SKU {Sku}, type {ProductType}, price {Price}, stock {Stock}",
+            product.Id, sku, dto.ProductType, dto.BasePrice, dto.InitialStock);
+
         return await GetByIdAsync(product.Id, ct);
     }
 
@@ -64,8 +75,12 @@ public sealed class ProductService : IProductService
         if (!string.IsNullOrEmpty(dto.RowVersion))
             _uow.Products.SetOriginalRowVersion(product, Convert.FromBase64String(dto.RowVersion));
 
+        using var activity = CatalogTelemetry.Source.StartActivity("ChangeProductPrice");
+        activity?.SetTag("product.id", id);
+
         product.ChangePrice(dto.Price);
         await _uow.SaveChangesAsync(ct);
+        _logger.LogInformation("Product {ProductId} price changed to {Price}", id, dto.Price);
         return _mapper.Map<ProductDto>(product);
     }
 
@@ -74,14 +89,20 @@ public sealed class ProductService : IProductService
         var product = await LoadAsync(id, ct);
         product.AddStock(dto.Quantity);
         await _uow.SaveChangesAsync(ct);
+        _logger.LogInformation("Product {ProductId} stock increased by {Quantity} to {Stock}", id, dto.Quantity, product.Stock);
         return _mapper.Map<ProductDto>(product);
     }
 
     public async Task<ProductDto> RemoveStockAsync(long id, StockChangeDto dto, CancellationToken ct = default)
     {
         var product = await LoadAsync(id, ct);
+        using var activity = CatalogTelemetry.Source.StartActivity("RemoveProductStock");
+        activity?.SetTag("product.id", id);
+        activity?.SetTag("stock.quantity", dto.Quantity);
+
         product.RemoveStock(dto.Quantity);                        // недостатньо → DomainException → 409
         await _uow.SaveChangesAsync(ct);
+        _logger.LogInformation("Product {ProductId} stock decreased by {Quantity} to {Stock}", id, dto.Quantity, product.Stock);
         return _mapper.Map<ProductDto>(product);
     }
 
@@ -109,6 +130,7 @@ public sealed class ProductService : IProductService
 
         product.Delete();                                         // м'яке видалення: Id товару копіюють інші сервіси
         await _uow.SaveChangesAsync(ct);
+        _logger.LogInformation("Product {ProductId} deleted (soft)", id);
     }
 
     private async Task<Product> LoadAsync(long id, CancellationToken ct) =>
