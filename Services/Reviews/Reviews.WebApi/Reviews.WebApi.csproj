@@ -9,7 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.*" />
   </ItemGroup>
 
@@ -17,6 +16,11 @@
     <ProjectReference Include="..\Reviews.Application\Reviews.Application.csproj" />
     <!-- Infrastructure — лише для реєстрації залежностей на старті (AddInfrastructure) -->
     <ProjectReference Include="..\Reviews.Infrastructure\Reviews.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Лаб. 05: спільні налаштування платформи (Serilog, OpenTelemetry, CorrelationId, health checks) -->
+    <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
 
 </Project>

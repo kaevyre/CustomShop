@@ -2,8 +2,9 @@ using Aspire.Hosting.ApplicationModel;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Пароль SA фіксований у коді: він записується у volume при першому запуску і не повинен залежати від середовища чи user-secrets.
-var sqlPassword = builder.AddParameter("sql-password", "Str0ng!Passw0rd", secret: true);
+// Пароль SA — параметр-секрет: значення береться з user-secrets AppHost (Parameters:sql-password)
+// або вводиться в Dashboard під час першого запуску; у коді його немає.
+var sqlPassword = builder.AddParameter("sql-password", secret: true);
 
 // Постійний volume: дані БД переживають перезапуск AppHost.
 var sql = builder.AddSqlServer("sql", sqlPassword)
@@ -22,7 +23,7 @@ builder.Eventing.Subscribe<ResourceReadyEvent>(ordersDb.Resource, async (@event,
     await DatabaseInitializer.ApplyAsync(connectionString, scriptsDirectory, cancellationToken);
 });
 
-builder.AddProject<Projects.Orders_Api>("orders-api")
+var orders = builder.AddProject<Projects.Orders_Api>("orders-api")
     .WithReference(ordersDb)
     .WaitFor(ordersDb)
     .WithHttpHealthCheck("/health");
@@ -30,7 +31,7 @@ builder.AddProject<Projects.Orders_Api>("orders-api")
 // Каталог (Лаб. 03): схему створюють міграції EF Core, сідінг — сам Catalog.Api на старті.
 var catalogDb = sql.AddDatabase("CatalogDb", "CustomShop_Catalog");
 
-builder.AddProject<Projects.Catalog_Api>("catalog-api")
+var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WithReference(catalogDb)
     .WaitFor(catalogDb)
     .WithHttpHealthCheck("/health");
@@ -40,9 +41,26 @@ var mongo = builder.AddMongoDB("mongo")
     .WithDataVolume("customshop-reviews-mongo");
 var reviewsDb = mongo.AddDatabase("ReviewsDb", "customshop_reviews");
 
-builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WithReference(reviewsDb)
     .WaitFor(reviewsDb)
     .WithHttpHealthCheck("/health");
+
+// Aggregator (Лаб. 05): паралельно опитує сервіси; стартує після них.
+// WithReference(orders) дає змінні services__orders-api__http__0 → service discovery за іменем "orders-api".
+var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
+    .WithReference(orders).WithReference(catalog).WithReference(reviews)
+    .WaitFor(orders).WaitFor(catalog).WaitFor(reviews)
+    .WithHttpHealthCheck("/health");
+
+// API Gateway (YARP) — єдина точка входу з фіксованим портом 5000; маршрутизує до всіх сервісів і Aggregator.
+// Порядок запуску: БД → сервіси → Aggregator → Gateway.
+builder.AddProject<Projects.Platform_ApiGateway>("gateway")
+    .WithHttpEndpoint(port: 5000, name: "public")
+    .WithReference(orders).WithReference(catalog).WithReference(reviews)
+    .WithReference(aggregator)
+    .WaitFor(aggregator)
+    .WithHttpHealthCheck("/health")
+    .WithExternalHttpEndpoints();
 
 builder.Build().Run();

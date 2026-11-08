@@ -696,3 +696,152 @@ db.reviews.find().limit(1)     // camelCase, вкладені author / comments,
 db.reviews.getIndexes()        // _id_, ix_product_createdAt, ix_author_createdAt, ux_product_author, tx_title_text
 db.builds.getIndexes()         // _id_, ix_items_productId, ix_tags_likes
 ```
+
+---
+
+# Лаб. 05 — мікросервісна платформа: .NET Aspire, YARP Gateway, Aggregator, OpenTelemetry, Serilog
+
+Сервіси з Лаб. 02–04 інтегровано в одну платформу: усе (SQL Server, MongoDB, три сервіси, Aggregator, Gateway) запускається однією командою через `Platform.AppHost`, клієнт звертається лише до Gateway, а один запит простежується в Aspire Dashboard через усі сервіси — за trace і за CorrelationId.
+
+## Структура рішення
+
+```
+Platform.slnx                 одне рішення на всю платформу
+Platform.AppHost/             ★ оркестрація (AppHost.cs): контейнери БД, сервіси, Aggregator, Gateway
+Platform.ServiceDefaults/     ★ Extensions.cs (Serilog, OpenTelemetry, health checks, service discovery, resilience),
+                                CorrelationId.cs (CorrelationIdMiddleware + CorrelationIdHandler)
+Platform.ApiGateway/          ★ YARP: appsettings.json (ReverseProxy), Program.cs, RoutingLoggingMiddleware.cs, Dockerfile
+Platform.Aggregator/          ★ Clients/ (OrdersClient, CatalogClient, ReviewsClient), Services/OrderCardService.cs,
+                                Models/FullOrderDto.cs, Controllers/AggregatorController.cs
+Services/Orders|Catalog|Reviews/   сервіси Лаб. 02–04
+```
+
+Залежності (односпрямовані):
+
+```
+Platform.AppHost ──► Orders.Api, Catalog.Api, Reviews.WebApi, Platform.ApiGateway, Platform.Aggregator
+Orders.Api, Catalog.Api, Reviews.WebApi, Platform.ApiGateway, Platform.Aggregator ──► Platform.ServiceDefaults
+```
+
+Ніхто не посилається на `AppHost`; Gateway і Aggregator не посилаються на проєкти сервісів — лише на їхні HTTP API за логічними іменами.
+
+## Запуск
+
+Потрібні .NET 9 SDK і **запущений Docker Desktop**.
+
+1. Один раз задати пароль SA як секрет AppHost (у коді його немає; для наявного volume — той самий пароль, що й у Лаб. 02):
+
+   ```bash
+   dotnet user-secrets set "Parameters:sql-password" "<пароль SA>" --project Platform.AppHost
+   ```
+
+   Без секрету Dashboard попросить ввести значення параметра `sql-password` під час запуску. Пароль MongoDB Aspire генерує сам і теж зберігає в user-secrets AppHost — не видаляйте його, інакше наявний volume `customshop-reviews-mongo` не прийме новий пароль (тоді `docker volume rm customshop-reviews-mongo`, сідінг відновить дані).
+
+2. Запустити платформу:
+
+   ```bash
+   dotnet run --project Platform.AppHost --launch-profile http
+   ```
+
+3. Dashboard: посилання з токеном з'являється в консолі (`http://localhost:15170/login?t=...`). Усі ресурси (`sql`, `OrdersDb`, `CatalogDb`, `mongo`, `ReviewsDb`, `orders-api`, `catalog-api`, `reviews-api`, `aggregator`, `gateway`) мають перейти у **Running / Healthy**.
+
+**Gateway: http://localhost:5000** — фіксований порт (`WithHttpEndpoint(port: 5000, name: "public")`).
+
+| Ресурс AppHost | Що це | Залежить від (`WithReference` + `WaitFor`) |
+|---|---|---|
+| `sql` | SQL Server, volume `customshop-orders-sql`, пароль — параметр-секрет `sql-password` | — |
+| `OrdersDb`, `CatalogDb` | бази на `sql`; імена = імена рядків підключення сервісів | `sql` |
+| `mongo` → `ReviewsDb` | MongoDB, volume `customshop-reviews-mongo` | — |
+| `orders-api`, `catalog-api`, `reviews-api` | сервіси Лаб. 02–04 | своя БД |
+| `aggregator` | композиція даних | три сервіси |
+| `gateway` | YARP, порт 5000 | три сервіси + `aggregator` |
+
+Порядок запуску: **БД → сервіси → Aggregator → Gateway**.
+
+## Приклади запитів через Gateway
+
+```bash
+curl -i http://localhost:5000/api/orders/1
+curl -i "http://localhost:5000/api/products?page=1&pageSize=5"
+curl -i "http://localhost:5000/api/reviews?productId=1"
+curl -i http://localhost:5000/api/customers/1
+curl -i http://localhost:5000/api/aggregator/orders/1/full
+
+# власний CorrelationId зберігається і повертається у відповіді
+curl -i -H "X-Correlation-Id: demo-123" http://localhost:5000/api/aggregator/orders/1/full
+
+# запис через Gateway
+curl -i -X POST http://localhost:5000/api/orders/5/status -H "Content-Type: application/json" -d '{"newStatus":"AwaitingValidation"}'
+```
+
+У кожній відповіді Gateway є заголовок `X-Correlation-Id` (рівно один).
+
+| Маршрут YARP | Шлях | Кластер → адреса |
+|---|---|---|
+| `aggregator` (`Order: 1`) | `/api/aggregator/{**catch-all}` | `http://aggregator` |
+| `orders`, `customers` | `/api/orders/…`, `/api/customers/…` | `http://orders-api` |
+| `catalog`, `categories`, `brands` | `/api/products/…`, `/api/categories/…`, `/api/brands/…` | `http://catalog-api` (`RoundRobin`) |
+| `reviews`, `builds` | `/api/reviews/…`, `/api/builds/…` | `http://reviews-api` |
+
+Адреси — логічні імена ресурсів AppHost; реальні порти підставляє `AddServiceDiscoveryDestinationResolver()`. Додатково: `ActivityTimeout` для кожного кластера, `MaxRequestBodySize` (1 МБ) і `Metadata` (Team, Version) для маршрутів. `/api/products` належить Каталогу, тож локальна копія товарів сервісу Замовлень (`orders-api /api/products`) через Gateway не публікується.
+
+## Aggregator: повна картка замовлення
+
+`GET /api/aggregator/orders/{id}/full`:
+
+1. `OrdersClient` → `orders-api` (`/api/orders/{id}`): без замовлення агрегувати нічого (404 — немає замовлення, 503 — недоступний orders-api).
+2. Паралельно (`Task.WhenAll`): `CatalogClient` → актуальні товари позицій, `ReviewsClient` → рейтинг і останні відгуки на ці товари.
+3. Збирається `FullOrderDto`: позиції замовлення (знімок назви/ціни) + `product` (поточна ціна, `priceChangedSinceOrder`, наявність) + `reviews` (середня оцінка, кількість, останні відгуки) + `warnings`, `isComplete`. JSON — camelCase, `null` не серіалізуються. Беруться лише товари й відгуки, що належать позиціям саме цього замовлення.
+
+Typed HttpClients зареєстровані з `BaseAddress = https+http://orders-api` тощо; CorrelationId, service discovery і resilience додаються до всіх клієнтів у `ServiceDefaults`. `CancellationToken` запиту передається в усі виклики; `.Result`/`Task.WaitAll` не використовуються. Кожен виклик логується з тривалістю («Calling catalog-api for product 1» → «catalog-api responded 200 … in 85 ms»).
+
+**Часткова відмова.** Зупиніть `reviews-api` у Dashboard (кнопка Stop) і повторіть запит — відповідь 200 із замовленням і товарами, без блоків `reviews`, з `"isComplete": false` і `"warnings": ["reviews-api is unavailable"]`; у логах aggregator — Warning з винятком. Після Start відповідь знову повна. Тайм-аути resilience для Aggregator скорочено (спроба 2 с, загалом 5 с), тому часткова відповідь приходить не пізніше ніж за ~5 с.
+
+## ServiceDefaults
+
+| Що | Де |
+|---|---|
+| Serilog — основний провайдер: рівень Debug у Development / Information інакше, фільтр шумних категорій (EF Core, HttpClient, ASP.NET Core); enrichers `ServiceName`, `Environment`, `MachineName`, `ThreadId`, `FromLogContext`; Console з `CompactJsonFormatter`; `writeToProviders: true` → провайдер OpenTelemetry → вкладка **Structured logs** | `Extensions.AddSerilogLogging` |
+| CorrelationId: береться з `X-Correlation-Id` або генерується (факт генерації логується), кладеться в `LogContext`, тег span `correlation.id` і заголовок відповіді; межі запиту логуються («Request started / finished … in N ms») | `CorrelationIdMiddleware` |
+| Той самий `X-Correlation-Id` у вихідних HTTP-запитах | `CorrelationIdHandler` (`ConfigureHttpClientDefaults`) |
+| OpenTelemetry: ASP.NET Core, HttpClient, SqlClient (Dapper + EF Core), MongoDB (`DiagnosticsActivityEventSubscriber` у `MongoDbContext`), власні `ActivitySource` (`Orders.*`, `Catalog.*`, `Reviews.*`, `Platform.*`), метрики, семплінг 100 % у Development, `UseOtlpExporter()` (батчевий) | `Extensions.ConfigureOpenTelemetry` |
+| `/health` (усі перевірки, у т.ч. MongoDB) і `/alive` | `MapDefaultEndpoints` |
+
+Зміни в сервісах Лаб. 02–04: `Program.cs` (`AddServiceDefaults`, `UseMiddleware<CorrelationIdMiddleware>`, `MapDefaultEndpoints`; власні `UseSerilog`/`UseSerilogRequestLogging` і CorrelationId-middleware Каталогу прибрано як дубль), reference на ServiceDefaults, підписка драйвера MongoDB на трасування. Рядки підключення приходять від Aspire (`ConnectionStrings__OrdersDb`, `…CatalogDb`, `…ReviewsDb`), резервні лишилися в `appsettings.json` для запуску без Aspire. Окремо додано логування бізнес-подій і власні spans:
+
+| Сервіс | Події (структуровані властивості) | Spans |
+|---|---|---|
+| Orders (`Orders.Bll/Services/OrderService.cs`) | `Order {OrderId} placed … {Amount} … {Status}`, зміна/відмова переходу статусу | `PlaceOrder`, `ChangeOrderStatus` |
+| Catalog (`Catalog.Bll/Services/ProductService.cs`) | створення товару, зміна ціни, складу, видалення | `CreateProduct`, `ChangeProductPrice`, `RemoveProductStock` |
+| Reviews (`Reviews.Application/Reviews/Commands/…`) | створення й оновлення відгуку | `CreateReview`, `UpdateReview` |
+| Aggregator | виклики сервісів з тривалістю, підсумок картки | `BuildOrderCard` |
+
+Чутливі дані (паролі, email, телефони) у логи й картку замовлення не потрапляють.
+
+## Gateway: логування й метрики
+
+`CorrelationIdMiddleware` стоїть **до** `MapReverseProxy` і генерує ідентифікатор на вході в систему; YARP копіює його в проксований запит. `RoutingLoggingMiddleware` логує метод, шлях, маршрут, кластер, адресу призначення, статус, тривалість, розмір відповіді та IP клієнта; помилки проксі (недоступний сервіс, тайм-аут) — рівнем Error з типом `ForwarderError`. Метрики (`Platform.ApiGateway`: `gateway.requests`, `gateway.errors`, `gateway.request.duration`) — у вкладці **Metrics** Dashboard.
+
+## Перевірка в Dashboard
+
+- **Structured logs** → фільтр `CorrelationId = <значення з заголовка відповіді>`: записи `gateway`, `aggregator`, `orders-api`, `catalog-api`, `reviews-api` з `ServiceName`, `Environment`, `MachineName`, `ThreadId`, TraceId/SpanId.
+- **Traces** → trace `gateway: GET /api/aggregator/{**catch-all}`: `gateway → aggregator → BuildOrderCard → orders-api → SELECT … (OrdersDb)`, далі одночасно `catalog-api → SELECT … (CatalogDb)` і `reviews-api → aggregate reviews (mongo)`.
+- Виклик сервісу напряму в обхід Gateway (адреса з Dashboard) теж повертає `X-Correlation-Id` (згенерований самим сервісом), але без логу маршрутизації й метрик Gateway.
+
+## Відповідність критеріям
+
+| Критерій | Де |
+|---|---|
+| Структура: AppHost, ServiceDefaults, Gateway, Aggregator, три сервіси, правильні посилання | `Platform.slnx`, `*.csproj` |
+| Контейнери SQL Server і MongoDB з `WithDataVolume`, пароль — параметр-секрет, імена баз = рядки підключення | `Platform.AppHost/AppHost.cs` |
+| `WithReference` + `WaitFor`, порядок БД → сервіси → Aggregator → Gateway, фіксований порт Gateway | `Platform.AppHost/AppHost.cs` |
+| Мінімальні зміни сервісів (`AddServiceDefaults`, `MapDefaultEndpoints`, рядки підключення з конфігурації, `/api/{domain}`) | `Services/*/…Api/Program.cs`, `appsettings.json` |
+| Логування бізнес-подій і власні spans | `Orders.Bll`, `Catalog.Bll`, `Reviews.Application` (`*Telemetry.cs`, сервіси/обробники) |
+| Serilog у ServiceDefaults | `Platform.ServiceDefaults/Extensions.cs` |
+| CorrelationId: middleware і DelegatingHandler | `Platform.ServiceDefaults/CorrelationId.cs`, `Platform.ApiGateway/Program.cs` |
+| OpenTelemetry: HTTP, SQL, MongoDB, OTLP | `Platform.ServiceDefaults/Extensions.cs`, `Reviews.Infrastructure/Persistence/MongoDbContext.cs` |
+| YARP-маршрути й кластери з логічними іменами | `Platform.ApiGateway/appsettings.json`, `Program.cs` |
+| CorrelationId і логування маршрутизації в Gateway | `Platform.ApiGateway/Program.cs`, `RoutingLoggingMiddleware.cs` |
+| Typed HttpClients через service discovery | `Platform.Aggregator/Clients/`, `Program.cs` |
+| `Task.WhenAll`, CancellationToken, часткові відмови з warnings | `Platform.Aggregator/Services/OrderCardService.cs` |
+| Композитний DTO (camelCase, без null) | `Platform.Aggregator/Models/FullOrderDto.cs`, `Program.cs` |

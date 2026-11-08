@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
+using Reviews.Application.Common.Telemetry;
 using Reviews.Domain.Entities;
 using Reviews.Domain.Interfaces;
 using Reviews.Domain.ValueObjects;
@@ -12,6 +13,10 @@ public sealed class CreateReviewCommandHandler(IReviewRepository reviews, ILogge
 {
     public async Task<string> Handle(CreateReviewCommand cmd, CancellationToken ct)
     {
+        using var activity = ReviewsTelemetry.Source.StartActivity("CreateReview");
+        activity?.SetTag("product.id", cmd.ProductId);
+        activity?.SetTag("review.rating", cmd.Rating);
+
         logger.LogInformation("CreateReviewCommandHandler: creating review of product {ProductId} by {AuthorProfileId}",
             cmd.ProductId, cmd.AuthorProfileId);
 
@@ -23,6 +28,11 @@ public sealed class CreateReviewCommandHandler(IReviewRepository reviews, ILogge
             cmd.OrderId);
 
         await reviews.AddAsync(review, ct);
-        return review.Id.ToString();
+
+        var reviewId = review.Id.ToString();
+        activity?.SetTag("review.id", reviewId);
+        logger.LogInformation("Review {ReviewId} created for product {ProductId} with rating {Rating}, order {OrderId}",
+            reviewId, cmd.ProductId, cmd.Rating, cmd.OrderId);
+        return reviewId;
     }
 }
