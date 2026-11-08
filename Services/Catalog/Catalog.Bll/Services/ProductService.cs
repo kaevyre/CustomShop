@@ -4,6 +4,7 @@ using Catalog.Bll.Specifications;
 using Catalog.Dal.Interfaces;
 using Catalog.Domain.Entities;
 using Catalog.Domain.Exceptions;
+using Catalog.Bll.Caching;
 using Catalog.Bll.Telemetry;
 using Microsoft.Extensions.Logging;
 
@@ -18,28 +19,64 @@ public sealed class ProductService : IProductService
     private readonly IUnitOfWork _uow;
     private readonly IMapper _mapper;
     private readonly ILogger<ProductService> _logger;
+    private readonly ITwoLevelCache _cache;
 
-    public ProductService(IUnitOfWork uow, IMapper mapper, ILogger<ProductService> logger)
+    public ProductService(IUnitOfWork uow, IMapper mapper, ILogger<ProductService> logger, ITwoLevelCache cache)
     {
         _uow = uow;
         _mapper = mapper;
         _logger = logger;
+        _cache = cache;
     }
 
     public async Task<PagedResult<ProductDto>> GetListAsync(ProductQuery query, CancellationToken ct = default)
     {
         var page = Math.Max(query.Page, 1);
         var pageSize = Math.Clamp(query.PageSize, 1, PageRequest.MaxPageSize);
-        var spec = new ProductsFilterSpec(query, page, pageSize);
+        var version = await _cache.GetVersionAsync(CatalogCacheKeys.ProductListsVersion, ct);
 
-        var total = await _uow.Products.CountAsync(spec, ct);     // SELECT COUNT(*) з тими самими фільтрами
-        var items = await _uow.Products.ListAsync(spec, ct);      // ORDER BY … OFFSET … FETCH
-
-        return new PagedResult<ProductDto>(_mapper.Map<List<ProductDto>>(items), total, page, pageSize);
+        return (await _cache.GetOrCreateAsync(
+            CatalogCacheKeys.ProductsList(version, query, page, pageSize),
+            CatalogCacheProfiles.List(pageSize),
+            async cancellation =>
+            {
+                var spec = new ProductsFilterSpec(query, page, pageSize);
+                var total = await _uow.Products.CountAsync(spec, cancellation);     // SELECT COUNT(*) з тими самими фільтрами
+                var items = await _uow.Products.ListAsync(spec, cancellation);      // ORDER BY … OFFSET … FETCH
+                return new PagedResult<ProductDto>(_mapper.Map<List<ProductDto>>(items), total, page, pageSize);
+            },
+            ct))!;
     }
 
     public async Task<ProductDetailsDto> GetByIdAsync(long id, CancellationToken ct = default) =>
-        _mapper.Map<ProductDetailsDto>(await LoadAsync(id, ct));
+        await GetCachedAsync(id, ct) ?? throw new EntityNotFoundException(nameof(Product), id);
+
+    /// <summary>Пакетне читання для gRPC (Aggregator): той самий кеш, що й у REST; відсутні товари пропускаються.</summary>
+    public async Task<IReadOnlyList<ProductDetailsDto>> GetByIdsAsync(IReadOnlyCollection<long> ids, CancellationToken ct = default)
+    {
+        var products = new List<ProductDetailsDto>(ids.Count);
+        foreach (var id in ids)                                   // послідовно: один DbContext на запит
+        {
+            if (await GetCachedAsync(id, ct) is { } product)
+                products.Add(product);
+        }
+
+        return products;
+    }
+
+    private Task<ProductDetailsDto?> GetCachedAsync(long id, CancellationToken ct) =>
+        _cache.GetOrCreateAsync(CatalogCacheKeys.Product(id), CatalogCacheProfiles.Product, async cancellation =>
+        {
+            var product = await _uow.Products.GetWithDetailsAsync(id, cancellation);
+            return product is null ? null : _mapper.Map<ProductDetailsDto>(product);
+        }, ct);
+
+    /// <summary>Після успішного запису: картка товару і всі списки, у які він входить.</summary>
+    private async Task InvalidateProductAsync(long id, string reason)
+    {
+        await _cache.InvalidateAsync(reason, CatalogCacheKeys.Product(id));
+        await _cache.BumpVersionAsync(CatalogCacheKeys.ProductListsVersion, reason);
+    }
 
     public async Task<ProductDetailsDto> CreateAsync(CreateProductDto dto, CancellationToken ct = default)
     {
@@ -66,6 +103,7 @@ public sealed class ProductService : IProductService
         _logger.LogInformation("Product {ProductId} created: SKU {Sku}, type {ProductType}, price {Price}, stock {Stock}",
             product.Id, sku, dto.ProductType, dto.BasePrice, dto.InitialStock);
 
+        await InvalidateProductAsync(product.Id, "ProductCreated");
         return await GetByIdAsync(product.Id, ct);
     }
 
@@ -80,6 +118,7 @@ public sealed class ProductService : IProductService
 
         product.ChangePrice(dto.Price);
         await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductPriceChanged");
         _logger.LogInformation("Product {ProductId} price changed to {Price}", id, dto.Price);
         return _mapper.Map<ProductDto>(product);
     }
@@ -89,6 +128,7 @@ public sealed class ProductService : IProductService
         var product = await LoadAsync(id, ct);
         product.AddStock(dto.Quantity);
         await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductStockChanged");
         _logger.LogInformation("Product {ProductId} stock increased by {Quantity} to {Stock}", id, dto.Quantity, product.Stock);
         return _mapper.Map<ProductDto>(product);
     }
@@ -102,6 +142,7 @@ public sealed class ProductService : IProductService
 
         product.RemoveStock(dto.Quantity);                        // недостатньо → DomainException → 409
         await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductStockChanged");
         _logger.LogInformation("Product {ProductId} stock decreased by {Quantity} to {Stock}", id, dto.Quantity, product.Stock);
         return _mapper.Map<ProductDto>(product);
     }
@@ -114,6 +155,7 @@ public sealed class ProductService : IProductService
 
         product.AddToCategory(dto.CategoryId, dto.IsFeatured, DateTime.UtcNow);
         await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductCategoryAssigned");
     }
 
     public async Task RemoveCategoryAsync(long id, int categoryId, CancellationToken ct = default)
@@ -121,6 +163,7 @@ public sealed class ProductService : IProductService
         var product = await LoadAsync(id, ct);
         product.RemoveFromCategory(categoryId);
         await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductCategoryRemoved");
     }
 
     public async Task DeleteAsync(long id, CancellationToken ct = default)
@@ -130,6 +173,7 @@ public sealed class ProductService : IProductService
 
         product.Delete();                                         // м'яке видалення: Id товару копіюють інші сервіси
         await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductDeleted");
         _logger.LogInformation("Product {ProductId} deleted (soft)", id);
     }
 

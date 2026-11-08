@@ -10,6 +10,18 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.10" />
+    <!-- Лаб. 06: gRPC-клієнти з DI, генерація клієнтського коду, Redis для агрегованих відповідей -->
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.76.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.33.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="All" />
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ті самі контракти, що й у сервісах; генерується лише клієнтська частина -->
+    <Protobuf Include="..\Services\Orders\Orders.Api\Protos\orders.proto" GrpcServices="Client" Link="Protos\orders.proto" />
+    <Protobuf Include="..\Services\Catalog\Catalog.Api\Protos\catalog.proto" GrpcServices="Client" Link="Protos\catalog.proto" />
+    <Protobuf Include="..\Services\Reviews\Reviews.WebApi\Protos\reviews.proto" GrpcServices="Client" Link="Protos\reviews.proto" />
   </ItemGroup>
 
   <ItemGroup>

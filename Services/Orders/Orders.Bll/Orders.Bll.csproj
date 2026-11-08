@@ -12,6 +12,8 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <!-- 14.x — остання версія AutoMapper під MIT-ліцензією (з 15.x потрібен ліцензійний ключ) -->
     <PackageReference Include="AutoMapper" Version="14.0.*" />
+    <!-- Лаб. 06: кеш у пам'яті (L1) -->
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.21" />
   </ItemGroup>
 
   <ItemGroup>

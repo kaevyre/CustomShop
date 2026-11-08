@@ -1,4 +1,5 @@
 using AutoMapper;
+using Orders.Bll.Caching;
 using Orders.Bll.Dtos;
 using Orders.Bll.Validation;
 using Orders.Dal.Abstractions;
@@ -11,32 +12,42 @@ public sealed class ProductService : IProductService
 {
     private readonly IUnitOfWork _uow;
     private readonly IMapper _mapper;
+    private readonly ITwoLevelCache _cache;
 
-    public ProductService(IUnitOfWork uow, IMapper mapper)
+    public ProductService(IUnitOfWork uow, IMapper mapper, ITwoLevelCache cache)
     {
         _uow = uow;
         _mapper = mapper;
+        _cache = cache;
     }
 
-    public async Task<ProductDto> GetAsync(long id, CancellationToken ct = default)
-    {
-        var product = await _uow.Products.GetByIdAsync(id, ct)
-            ?? throw new NotFoundException(nameof(Product), id);
-        return _mapper.Map<ProductDto>(product);
-    }
+    public async Task<ProductDto> GetAsync(long id, CancellationToken ct = default) =>
+        await _cache.GetOrCreateAsync(OrdersCacheKeys.Product(id), OrdersCacheProfiles.Product, async cancellation =>
+        {
+            var product = await _uow.Products.GetByIdAsync(id, cancellation);
+            return product is null ? null : _mapper.Map<ProductDto>(product);
+        }, ct) ?? throw new NotFoundException(nameof(Product), id);
 
     public async Task<PagedResultDto<ProductDto>> ListAsync(int page, int pageSize, CancellationToken ct = default)
     {
         RequestRules.EnsurePaging(page, pageSize);
 
-        var result = await _uow.Products.GetPagedAsync(page, pageSize, ct);
-        return new PagedResultDto<ProductDto>
-        {
-            Items = _mapper.Map<List<ProductDto>>(result.Items),
-            TotalCount = result.TotalCount,
-            Page = result.Page,
-            PageSize = result.PageSize
-        };
+        var version = await _cache.GetVersionAsync(OrdersCacheKeys.ProductListsVersion, ct);
+        return (await _cache.GetOrCreateAsync(
+            OrdersCacheKeys.ProductsList(version, page, pageSize),
+            OrdersCacheProfiles.List(pageSize),
+            async cancellation =>
+            {
+                var result = await _uow.Products.GetPagedAsync(page, pageSize, cancellation);
+                return new PagedResultDto<ProductDto>
+                {
+                    Items = _mapper.Map<List<ProductDto>>(result.Items),
+                    TotalCount = result.TotalCount,
+                    Page = result.Page,
+                    PageSize = result.PageSize
+                };
+            },
+            ct))!;
     }
 
     public async Task<ProductDto> CreateAsync(CreateProductDto dto, CancellationToken ct = default)
@@ -54,6 +65,7 @@ public sealed class ProductService : IProductService
         product.SyncedAt = DateTime.UtcNow;
         await _uow.Products.AddAsync(product, ct);
 
+        await InvalidateAsync(product.Id, "ProductCreated");
         return await GetAsync(product.Id, ct);
     }
 
@@ -80,6 +92,7 @@ public sealed class ProductService : IProductService
         if (!updated)
             throw new BusinessConflictException("The product was modified by someone else. Reload it and try again.");
 
+        await InvalidateAsync(id, "ProductUpdated");
         return await GetAsync(id, ct);
     }
 
@@ -88,5 +101,13 @@ public sealed class ProductService : IProductService
         var deleted = await _uow.Products.DeleteAsync(id, ct);
         if (!deleted)
             throw new NotFoundException(nameof(Product), id);
+
+        await InvalidateAsync(id, "ProductDeleted");
+    }
+
+    private async Task InvalidateAsync(long id, string reason)
+    {
+        await _cache.InvalidateAsync(reason, OrdersCacheKeys.Product(id));
+        await _cache.BumpVersionAsync(OrdersCacheKeys.ProductListsVersion, reason);
     }
 }

@@ -6,6 +6,7 @@ public interface IProductService
 {
     Task<PagedResult<ProductDto>> GetListAsync(ProductQuery query, CancellationToken ct = default);
     Task<ProductDetailsDto> GetByIdAsync(long id, CancellationToken ct = default);
+    Task<IReadOnlyList<ProductDetailsDto>> GetByIdsAsync(IReadOnlyCollection<long> ids, CancellationToken ct = default);
     Task<ProductDetailsDto> CreateAsync(CreateProductDto dto, CancellationToken ct = default);
     Task<ProductDto> ChangePriceAsync(long id, ChangePriceDto dto, CancellationToken ct = default);
     Task<ProductDto> AddStockAsync(long id, StockChangeDto dto, CancellationToken ct = default);

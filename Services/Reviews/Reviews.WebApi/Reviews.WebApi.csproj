@@ -10,6 +10,13 @@
 
   <ItemGroup>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.*" />
+    <!-- Лаб. 06: gRPC-сервер і Redis (IDistributedCache) -->
+    <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\reviews.proto" GrpcServices="Server" />
   </ItemGroup>
 
   <ItemGroup>

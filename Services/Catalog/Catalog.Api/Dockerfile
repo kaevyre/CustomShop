@@ -17,6 +17,7 @@ RUN dotnet publish Services/Catalog/Catalog.Api/Catalog.Api.csproj -c Release -o
 FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
 COPY --from=build /app/publish .
-ENV ASPNETCORE_URLS=http://+:8080
-EXPOSE 8080
+ENV Kestrel__Endpoints__http__Url=http://+:8080
+ENV Kestrel__Endpoints__grpc__Url=http://+:8081
+EXPOSE 8080 8081
 ENTRYPOINT ["dotnet", "Catalog.Api.dll"]

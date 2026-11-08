@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+option csharp_namespace = "Catalog.Grpc";
+
+package catalog;
+
+// Читання даних каталогу для внутрішніх сервісів платформи.
+// Номери полів не змінюються після публікації: саме вони визначають бінарний формат.
+service CatalogService {
+  // Картка товару; NOT_FOUND, якщо його немає.
+  rpc GetProduct (GetProductRequest) returns (ProductReply);
+
+  // Кілька товарів одним викликом; відсутні товари не потрапляють у відповідь.
+  rpc GetProductsByIds (GetProductsByIdsRequest) returns (ProductsReply);
+}
+
+message GetProductRequest {
+  int64 id = 1;
+}
+
+message GetProductsByIdsRequest {
+  repeated int64 ids = 1;
+}
+
+// Грошова сума без втрати точності: units + nanos / 10^9.
+message Money {
+  int64 units = 1;
+  int32 nanos = 2;
+}
+
+message ProductReply {
+  int64 id = 1;
+  string sku = 2;
+  string name = 3;
+  string product_type = 4;
+  optional string brand_name = 5;
+  Money price = 6;
+  int32 stock = 7;
+  bool is_customizable = 8;
+  bool is_active = 9;
+}
+
+message ProductsReply {
+  repeated ProductReply products = 1;
+}
