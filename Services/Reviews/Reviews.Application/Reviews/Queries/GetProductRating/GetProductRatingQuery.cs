@@ -1,12 +1,18 @@
 using FluentValidation;
 using MediatR;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Interfaces;
 using Reviews.Domain.Exceptions;
 
 namespace Reviews.Application.Reviews.Queries.GetProductRating;
 
 /// <summary>Середня оцінка й розподіл оцінок товару (aggregation pipeline: $match → $group).</summary>
-public sealed record GetProductRatingQuery(long ProductId) : IQuery<ProductRatingDto>;
+public sealed record GetProductRatingQuery(long ProductId) : IQuery<ProductRatingDto>, ICacheableQuery
+{
+    public string GetCacheKey(string listsVersion) => ReviewsCacheKeys.ProductRating(ProductId);
+
+    public CacheProfile GetCacheProfile() => ReviewsCacheProfiles.Rating;
+}
 
 public sealed class GetProductRatingQueryHandler(IReviewQueries queries)
     : IRequestHandler<GetProductRatingQuery, ProductRatingDto>

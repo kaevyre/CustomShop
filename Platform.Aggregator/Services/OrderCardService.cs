@@ -1,34 +1,51 @@
 using System.Diagnostics;
+using Catalog.Grpc;
+using Grpc.Core;
+using Orders.Grpc;
+using Platform.Aggregator.Caching;
 using Platform.Aggregator.Clients;
-using Platform.Aggregator.Models;
+using Reviews.Grpc;
+using CatalogMoney = Catalog.Grpc.Money;
+using OrdersMoney = Orders.Grpc.Money;
 
 namespace Platform.Aggregator.Services;
 
-public enum OrderCardOutcome { Found, NotFound, OrdersUnavailable }
-
-public sealed record OrderCardResult(OrderCardOutcome Outcome, FullOrderDto? Card = null);
-
 /// <summary>
-/// Збирає повну картку замовлення: спершу замовлення (без нього агрегувати нічого), потім паралельно
-/// (<see cref="Task.WhenAll(Task[])"/>) товари з catalog-api і відгуки з reviews-api.
+/// Повна картка замовлення через gRPC: спершу кеш Redis, далі замовлення (без нього агрегувати нічого),
+/// потім паралельно (<see cref="Task.WhenAll(Task[])"/>) товари й відгуки в межах одного HTTP/2-з'єднання на сервіс.
 /// Недоступність catalog-api чи reviews-api не «валить» запит: повертаються доступні дані + Warnings.
 /// </summary>
 public sealed class OrderCardService(
-    OrdersClient orders,
-    CatalogClient catalog,
-    ReviewsClient reviews,
+    OrdersService.OrdersServiceClient orders,
+    CatalogService.CatalogServiceClient catalog,
+    ReviewsService.ReviewsServiceClient reviews,
+    OrderCardCache cache,
     ILogger<OrderCardService> logger)
 {
-    private static readonly ActivitySource Source = new("Platform.Aggregator");
+    private const string OrdersApi = "orders-api";
+    private const string CatalogApi = "catalog-api";
+    private const string ReviewsApi = "reviews-api";
 
-    public async Task<OrderCardResult> GetFullOrderAsync(long orderId, CancellationToken ct)
+    private static readonly ActivitySource Source = new("Platform.Aggregator");
+    private static readonly TimeSpan CallDeadline = TimeSpan.FromSeconds(4);
+
+    public async Task<OrderCardResult> GetFullOrderAsync(long orderId, CancellationToken ct, bool useCache = true)
     {
         using var activity = Source.StartActivity("BuildOrderCard");
         activity?.SetTag("order.id", orderId);
 
+        if (useCache && await cache.GetAsync(orderId, ct) is { } cached)      // ДО gRPC-викликів
+        {
+            activity?.SetTag("cache.hit", true);
+            return new OrderCardResult(OrderCardOutcome.Found, cached);
+        }
+
+        activity?.SetTag("cache.hit", false);
         var warnings = new List<string>();
 
-        var order = await SafeAsync(() => orders.GetOrderAsync(orderId, ct), OrdersClient.ServiceName, warnings, ct);
+        var order = await SafeAsync(
+            () => orders.GetOrderAsync(new GetOrderRequest { Id = orderId }, deadline: Deadline(), cancellationToken: ct).ResponseAsync,
+            OrdersApi, warnings, ct);
         if (order is null)
         {
             if (warnings.Count > 0)
@@ -41,106 +58,122 @@ public sealed class OrderCardService(
             return new OrderCardResult(OrderCardOutcome.NotFound);
         }
 
-        var items = order.Items ?? [];
-        var productIds = items.Select(i => i.ProductId).Distinct().ToList();
+        var productIds = order.Items.Select(i => i.ProductId).Distinct().ToList();
 
         // незалежні виклики — одночасно: загальний час ≈ найповільніший сервіс, а не сума
-        var productsTask = SafeAsync(() => catalog.GetProductsAsync(productIds, ct), CatalogClient.ServiceName, warnings, ct);
-        var reviewsTask = SafeAsync(() => reviews.GetForProductsAsync(productIds, ct), ReviewsClient.ServiceName, warnings, ct);
+        var productsTask = SafeAsync(
+            () => catalog.GetProductsByIdsAsync(new GetProductsByIdsRequest { Ids = { productIds } },
+                deadline: Deadline(), cancellationToken: ct).ResponseAsync,
+            CatalogApi, warnings, ct);
+        var reviewsTask = SafeAsync(
+            () => reviews.GetForProductsAsync(new GetForProductsRequest { ProductIds = { productIds } },
+                deadline: Deadline(), cancellationToken: ct).ResponseAsync,
+            ReviewsApi, warnings, ct);
         await Task.WhenAll(productsTask, reviewsTask);
 
-        var products = await productsTask;
-        var productReviews = await reviewsTask;
+        var products = (await productsTask)?.Products.Select(ToDto).ToList();
+        var productReviews = (await reviewsTask)?.Products.Select(ToDto).ToList();
 
-        // узгодженість: беремо лише товари/відгуки, що належать позиціям саме цього замовлення
-        var productsById = (products ?? [])
-            .Where(p => productIds.Contains(p.Id))
-            .ToDictionary(p => p.Id);
-        var reviewsById = (productReviews ?? [])
-            .Where(r => productIds.Contains(r.ProductId))
-            .ToDictionary(r => r.ProductId);
-
-        if (products is not null)
-        {
-            foreach (var missing in productIds.Where(id => !productsById.ContainsKey(id)))
-            {
-                logger.LogWarning("Product {ProductId} of order {OrderId} is missing in catalog-api", missing, orderId);
-                lock (warnings) warnings.Add($"Product {missing} is no longer available in catalog-api");
-            }
-        }
-
-        var lines = items.Select(item => new OrderLineCard(
-            item.ProductId,
-            item.ProductName,
-            item.UnitPrice,
-            item.Units,
-            item.Discount,
-            item.LineTotal,
-            (item.Options ?? []).Select(o => $"{o.OptionGroup}: {o.OptionValue}").ToList(),
-            productsById.TryGetValue(item.ProductId, out var product) ? ToCard(product, item) : null,
-            reviewsById.TryGetValue(item.ProductId, out var r) ? ToCard(r) : null)).ToList();
-
-        var card = new FullOrderDto(
-            order.Id,
-            order.Status,
-            order.OrderDate,
-            order.PaidAt,
-            order.ShippedAt,
-            order.TotalAmount,
-            order.Customer is { } c ? new OrderCustomerCard(c.Id, c.FullName) : null,
-            order.Delivery is { } d ? new OrderDeliveryCard(d.RecipientName, d.City, d.DeliveryMethod) : null,
-            lines,
-            IsComplete: warnings.Count == 0,
-            warnings);
-
-        activity?.SetTag("order.items", lines.Count);
+        var card = OrderCardAssembler.Build(ToDto(order), products, productReviews, warnings, logger);
+        activity?.SetTag("order.items", card.Items.Count);
         activity?.SetTag("aggregator.warnings", warnings.Count);
-        logger.LogInformation(
-            "Order card {OrderId} built: {ItemsCount} items, status {Status}, {WarningsCount} warnings",
-            order.Id, lines.Count, order.Status, warnings.Count);
+
+        if (useCache)
+            await cache.SetAsync(card, ct);                                   // часткові відповіді не кешуються
 
         return new OrderCardResult(OrderCardOutcome.Found, card);
     }
 
+    private static DateTime Deadline() => DateTime.UtcNow.Add(CallDeadline);
+
     /// <summary>
-    /// Виклик сервісу з вимірюванням тривалості. Будь-яка відмова (мережа, 5xx, тайм-аут/circuit breaker resilience,
-    /// некоректний JSON) → попередження замість винятку. Скасування самим клієнтом не перехоплюється.
+    /// gRPC-виклик із вимірюванням тривалості. NotFound — не збій (результат null без попередження);
+    /// відмова сервісу → попередження замість 500. Скасування самим клієнтом не перехоплюється.
     /// </summary>
     private async Task<T?> SafeAsync<T>(Func<Task<T>> call, string service, List<string> warnings, CancellationToken ct)
+        where T : class
     {
         var sw = Stopwatch.StartNew();
         try
         {
             var result = await call();
-            logger.LogInformation("{Service} responded in {ElapsedMs} ms", service, sw.ElapsedMilliseconds);
+            logger.LogInformation("{Service} responded in {ElapsedMs} ms via {Transport}", service, sw.ElapsedMilliseconds, "grpc");
             return result;
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+        {
+            logger.LogInformation("{Service} returned {GrpcStatus} in {ElapsedMs} ms", service, ex.StatusCode, sw.ElapsedMilliseconds);
+            return null;
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unavailable or StatusCode.DeadlineExceeded)
+        {
+            logger.LogWarning(ex, "{Service} is unavailable: {GrpcStatus} after {ElapsedMs} ms", service, ex.StatusCode, sw.ElapsedMilliseconds);
+            AddWarning(service, warnings);
+            return null;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            logger.LogWarning(ex, "{Service} is unavailable after {ElapsedMs} ms: {Error}",
-                service, sw.ElapsedMilliseconds, ex.Message);
-            lock (warnings) warnings.Add($"{service} is unavailable");
-            Activity.Current?.AddEvent(new ActivityEvent($"{service} unavailable"));
-            return default;
+            // напр. тайм-аут чи circuit breaker resilience-конвеєра, які gRPC-клієнт віддає як Internal
+            logger.LogWarning(ex, "{Service} call failed after {ElapsedMs} ms", service, sw.ElapsedMilliseconds);
+            AddWarning(service, warnings);
+            return null;
         }
     }
 
-    private static CatalogProductCard ToCard(ProductDto p, OrderItemDto item) => new(
+    private static void AddWarning(string service, List<string> warnings)
+    {
+        lock (warnings) warnings.Add($"{service} is unavailable");
+        Activity.Current?.AddEvent(new ActivityEvent($"{service} unavailable"));
+    }
+
+    // gRPC-повідомлення → внутрішні контракти, спільні для обох транспортів
+    private static OrderDto ToDto(OrderReply o) => new(
+        o.Id,
+        o.CustomerId,
+        o.Status,
+        o.OrderDate.ToDateTime(),
+        o.PaidAt?.ToDateTime(),
+        o.ShippedAt?.ToDateTime(),
+        ToDecimal(o.TotalAmount),
+        o.Customer is { } c ? new OrderCustomerDto(c.Id, c.FullName) : null,
+        o.Delivery is { } d ? new OrderDeliveryDto(d.RecipientName, d.City, d.DeliveryMethod) : null,
+        o.Items.Select(i => new OrderItemDto(
+            i.Id,
+            i.ProductId,
+            i.ProductName,
+            ToDecimal(i.UnitPrice),
+            i.Units,
+            ToDecimal(i.Discount),
+            ToDecimal(i.LineTotal),
+            i.Options.Select(x => new OrderItemOptionDto(x.OptionId, x.OptionGroup, x.OptionValue, ToDecimal(x.PriceDelta))).ToList()))
+        .ToList());
+
+    private static ProductDto ToDto(ProductReply p) => new(
+        p.Id,
         p.Sku,
         p.Name,
         p.ProductType,
-        p.BrandName,
-        p.BasePrice,
-        PriceChangedSinceOrder: p.BasePrice != item.UnitPrice,
+        p.HasBrandName ? p.BrandName : null,
+        ToDecimal(p.Price),
         p.Stock,
-        InStock: p.IsActive && p.Stock > 0,
+        p.IsCustomizable,
         p.IsActive);
 
-    private static ProductReviewsCard ToCard(ProductReviewsDto r) => new(
-        r.Rating is null ? null : Math.Round(r.Rating.AverageRating, 2),
-        r.TotalCount,
-        r.Latest
-            .Where(x => x.ProductId == r.ProductId)
-            .Select(x => new ReviewCard(x.Id, x.AuthorName, x.Rating, x.Title, x.Text, x.VerifiedPurchase, x.CreatedAt))
-            .ToList());
+    private static ProductReviewsDto ToDto(ProductReviews r) => new(
+        r.ProductId,
+        r.HasAverageRating ? new ProductRatingDto(r.ProductId, (int)r.TotalCount, r.AverageRating) : null,
+        r.Latest.Select(x => new ReviewDto(
+            x.Id,
+            x.ProductId,
+            x.AuthorName,
+            x.Rating,
+            x.HasTitle ? x.Title : null,
+            x.Text,
+            x.VerifiedPurchase,
+            x.CreatedAt.ToDateTime())).ToList(),
+        r.TotalCount);
+
+    private static decimal ToDecimal(OrdersMoney? m) => m is null ? 0 : m.Units + m.Nanos / 1_000_000_000m;
+
+    private static decimal ToDecimal(CatalogMoney? m) => m is null ? 0 : m.Units + m.Nanos / 1_000_000_000m;
 }

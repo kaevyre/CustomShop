@@ -1,6 +1,7 @@
 using System.Data;
 using AutoMapper;
 using Microsoft.Extensions.Logging;
+using Orders.Bll.Caching;
 using Orders.Bll.Dtos;
 using Orders.Bll.Telemetry;
 using Orders.Bll.Validation;
@@ -17,12 +18,14 @@ public sealed class OrderService : IOrderService
     private readonly IUnitOfWork _uow;
     private readonly IMapper _mapper;
     private readonly ILogger<OrderService> _logger;
+    private readonly ITwoLevelCache _cache;
 
-    public OrderService(IUnitOfWork uow, IMapper mapper, ILogger<OrderService> logger)
+    public OrderService(IUnitOfWork uow, IMapper mapper, ILogger<OrderService> logger, ITwoLevelCache cache)
     {
         _uow = uow;
         _mapper = mapper;
         _logger = logger;
+        _cache = cache;
     }
 
     public async Task<OrderDto> GetAsync(long id, CancellationToken ct = default)
@@ -111,6 +114,8 @@ public sealed class OrderService : IOrderService
             return newOrderId;
         }, IsolationLevel.ReadCommitted, ct);
 
+        await _cache.InvalidateAsync("OrderPlaced", OrdersCacheKeys.Statistics);
+
         var placed = await GetAsync(orderId, ct);
         activity?.SetTag("order.id", orderId);
         _logger.LogInformation(
@@ -149,15 +154,35 @@ public sealed class OrderService : IOrderService
         }
 
         var result = await _uow.Orders.ChangeStatusAsync(id, dto.NewStatus, expectedRowVersion, Actor, ct);
+        await InvalidateAfterStatusChangeAsync(id, dto.NewStatus, ct);
         _logger.LogInformation("Order {OrderId} status changed {OldStatus} -> {Status}",
             id, order.Status, result.Status);
         return _mapper.Map<OrderStatusResultDto>(result);
     }
 
-    public async Task<IReadOnlyList<OrderStatusStatisticsDto>> GetStatusStatisticsAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<OrderStatusStatisticsDto>> GetStatusStatisticsAsync(CancellationToken ct = default) =>
+        (await _cache.GetOrCreateAsync<List<OrderStatusStatisticsDto>>(OrdersCacheKeys.Statistics, OrdersCacheProfiles.Statistics,
+            async cancellation =>
+            {
+                var rows = await _uow.OrderSummaries.GetStatusStatisticsAsync(cancellation);
+                return _mapper.Map<List<OrderStatusStatisticsDto>>(rows);
+            }, ct))!;
+
+    /// <summary>
+    /// Статистика й агрегована картка змінюються завжди; залишки товарів — лише коли usp_ChangeOrderStatus
+    /// резервує склад (StockConfirmed) або повертає його (Cancelled).
+    /// </summary>
+    private async Task InvalidateAfterStatusChangeAsync(long orderId, string newStatus, CancellationToken ct)
     {
-        var rows = await _uow.OrderSummaries.GetStatusStatisticsAsync(ct);
-        return _mapper.Map<List<OrderStatusStatisticsDto>>(rows);
+        const string reason = "OrderStatusChanged";
+        await _cache.InvalidateAsync(reason, OrdersCacheKeys.Statistics, OrdersCacheKeys.AggregatedOrder(orderId));
+
+        if (newStatus is not (OrderStatus.StockConfirmed or OrderStatus.Cancelled))
+            return;
+
+        var items = await _uow.OrderItems.GetByOrderIdAsync(orderId, ct);
+        await _cache.InvalidateAsync(reason, items.Select(i => OrdersCacheKeys.Product(i.ProductId)).Distinct().ToArray());
+        await _cache.BumpVersionAsync(OrdersCacheKeys.ProductListsVersion, reason);
     }
 
     private static void EnsureProductsAvailable(CreateOrderDto dto, IReadOnlyDictionary<long, Product> products)

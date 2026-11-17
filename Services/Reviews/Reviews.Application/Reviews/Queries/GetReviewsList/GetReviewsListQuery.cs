@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Interfaces;
 using Reviews.Application.Common.Models;
 using Reviews.Application.Common.Validation;
@@ -14,7 +15,15 @@ public sealed record GetReviewsListQuery(
     int? MinRating = null,
     string? Search = null,
     int Page = 1,
-    int PageSize = 20) : IQuery<PagedResult<ReviewDto>>;
+    int PageSize = 20) : IQuery<PagedResult<ReviewDto>>, ICacheableQuery
+{
+    bool ICacheableQuery.UsesListsVersion => true;
+
+    public string GetCacheKey(string listsVersion) =>
+        ReviewsCacheKeys.List(listsVersion, ProductId, AuthorProfileId, MinRating, Search, Page, PageSize);
+
+    public CacheProfile GetCacheProfile() => ReviewsCacheProfiles.List(PageSize);
+}
 
 public sealed class GetReviewsListQueryHandler(IReviewQueries queries)
     : IRequestHandler<GetReviewsListQuery, PagedResult<ReviewDto>>

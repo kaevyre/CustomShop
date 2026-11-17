@@ -1,4 +1,5 @@
 using AutoMapper;
+using Catalog.Bll.Caching;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Specifications;
 using Catalog.Dal.Interfaces;
@@ -11,18 +12,23 @@ public sealed class BrandService : IBrandService
 {
     private readonly IUnitOfWork _uow;
     private readonly IMapper _mapper;
+    private readonly ITwoLevelCache _cache;
 
-    public BrandService(IUnitOfWork uow, IMapper mapper)
+    public BrandService(IUnitOfWork uow, IMapper mapper, ITwoLevelCache cache)
     {
         _uow = uow;
         _mapper = mapper;
+        _cache = cache;
     }
 
-    public async Task<IReadOnlyList<BrandDto>> GetAllAsync(CancellationToken ct = default)
-    {
-        var brands = await _uow.Brands.GetAllAsync(ct);
-        return _mapper.Map<List<BrandDto>>(brands.OrderBy(b => b.Name));
-    }
+    // бренди змінюються лише сідінгом/міграціями, тому запису, який мав би їх інвалідувати, в API немає
+    public async Task<IReadOnlyList<BrandDto>> GetAllAsync(CancellationToken ct = default) =>
+        (await _cache.GetOrCreateAsync<List<BrandDto>>(CatalogCacheKeys.BrandsAll, CatalogCacheProfiles.Reference,
+            async cancellation =>
+            {
+                var brands = await _uow.Brands.GetAllAsync(cancellation);
+                return _mapper.Map<List<BrandDto>>(brands.OrderBy(b => b.Name));
+            }, ct))!;
 
     public async Task<PagedResult<ProductDto>> GetProductsAsync(int brandId, PageRequest paging, CancellationToken ct = default)
     {

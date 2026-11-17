@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -27,6 +29,9 @@ public static class Extensions
 
     /// <summary>ActivitySource драйвера MongoDB (пакет MongoDB.Driver.Core.Extensions.DiagnosticSources).</summary>
     public const string MongoActivitySource = "MongoDB.Driver.Core.Extensions.DiagnosticSources";
+
+    /// <summary>Meter-и кешу сервісів (Лаб. 06): лічильники cache.hits / cache.misses з тегом cache.level (L1/L2).</summary>
+    public static readonly string[] CacheMeters = ["Catalog.Cache", "Orders.Cache", "Reviews.Cache", "Platform.Aggregator.Cache"];
 
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
@@ -69,6 +74,7 @@ public static class Extensions
             .MinimumLevel.Override("Microsoft.Extensions.Http", LogEventLevel.Warning)
             .MinimumLevel.Override("Polly", LogEventLevel.Warning)
             .MinimumLevel.Override("Yarp", LogEventLevel.Information)
+            .MinimumLevel.Override("Grpc", LogEventLevel.Information)
             // сервіс може уточнити рівні у власній секції "Serilog" appsettings.json
             .ReadFrom.Configuration(builder.Configuration)
             .ReadFrom.Services(services)
@@ -105,7 +111,8 @@ public static class Extensions
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
-                .AddMeter(appName))                                 // власні метрики (напр. Gateway)
+                .AddMeter(appName)                                  // власні метрики (напр. Gateway)
+                .AddMeter(CacheMeters))                             // cache.hits / cache.misses (Лаб. 06)
             .WithTracing(tracing => tracing
                 .SetSampler(CreateSampler(builder))
                 .AddSource(appName)                                 // власні spans бізнес-операцій
@@ -115,11 +122,26 @@ public static class Extensions
                     // health checks не засмічують трасування
                     o.Filter = ctx => !ctx.Request.Path.StartsWithSegments(HealthEndpointPath)
                                    && !ctx.Request.Path.StartsWithSegments(AlivenessEndpointPath))
-                .AddHttpClientInstrumentation()
+                .AddHttpClientInstrumentation(o =>
+                    o.EnrichWithHttpRequestMessage = EnrichGrpcClientSpan)  // клієнтські gRPC-виклики йдуть через HttpClient
                 .AddSqlClientInstrumentation());                    // Dapper (Лаб. 02) та EF Core (Лаб. 03)
 
         builder.AddOpenTelemetryExporters();
         return builder;
+    }
+
+    /// <summary>Атрибути rpc.* на клієнтському span, щоб Dashboard показував виклик як gRPC, а не просто POST.</summary>
+    private static void EnrichGrpcClientSpan(Activity activity, HttpRequestMessage request)
+    {
+        if (request.Content?.Headers.ContentType?.MediaType?.StartsWith("application/grpc", StringComparison.OrdinalIgnoreCase) != true
+            || request.RequestUri is null)
+            return;
+
+        var (service, method) = GrpcLoggingInterceptor.ParseMethod(request.RequestUri.AbsolutePath);
+        activity.SetTag("rpc.system", "grpc");
+        activity.SetTag("rpc.service", service);
+        activity.SetTag("rpc.method", method);
+        activity.DisplayName = $"{service}/{method}";
     }
 
     /// <summary>100 % у Development, у решті середовищ — частка з OpenTelemetry:SamplingRatio (за замовчуванням 0.25).</summary>
@@ -147,16 +169,32 @@ public static class Extensions
         return builder;
     }
 
-    /// <summary>/health — усі перевірки (готовність, у т.ч. БД); /alive — лише «live» (процес живий).</summary>
+    /// <summary>Статистика кешу в /health; недоступний Redis дає Degraded, а не Unhealthy (Лаб. 06).</summary>
+    public static TBuilder AddCacheHealthCheck<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+    {
+        builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache", HealthStatus.Degraded, ["cache"]);
+        return builder;
+    }
+
+    /// <summary>/health — усі перевірки (готовність, у т.ч. БД і кеш) у JSON; /alive — лише «live» (процес живий).</summary>
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
-        app.MapHealthChecks(HealthEndpointPath);
+        app.MapHealthChecks(HealthEndpointPath, new HealthCheckOptions { ResponseWriter = WriteHealthJsonAsync });
         app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions
         {
             Predicate = r => r.Tags.Contains("live")
         });
         return app;
     }
+
+    private static Task WriteHealthJsonAsync(HttpContext context, HealthReport report) =>
+        context.Response.WriteAsJsonAsync(new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.ToDictionary(
+                entry => entry.Key,
+                entry => new { status = entry.Value.Status.ToString(), description = entry.Value.Description, data = entry.Value.Data })
+        });
 
     private static string ServiceName(IHostApplicationBuilder builder) =>
         builder.Configuration["OTEL_SERVICE_NAME"] is { Length: > 0 } name ? name : builder.Environment.ApplicationName;

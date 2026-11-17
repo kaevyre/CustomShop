@@ -1,5 +1,7 @@
 using System.Globalization;
+using Catalog.Api.Grpc;
 using Catalog.Api.Middleware;
+using Catalog.Bll.Caching;
 using Catalog.Bll.Mapping;
 using Catalog.Bll.Services;
 using Catalog.Bll.Validation;
@@ -32,6 +34,29 @@ builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IBrandService, BrandService>();
 
+// Лаб. 06: L1 — кеш у пам'яті з обмеженням розміру, L2 — Redis через Aspire-інтеграцію (ConnectionStrings:redis)
+builder.Services.AddMemoryCache(o =>
+{
+    o.SizeLimit = 10_000;                 // в одиницях Size записів
+    o.CompactionPercentage = 0.25;
+    o.TrackStatistics = true;
+});
+if (!string.IsNullOrEmpty(builder.Configuration.GetConnectionString("redis")))
+    builder.AddRedisDistributedCache("redis", s => s.DisableHealthChecks = true,
+        o => { o.AbortOnConnectFail = false; o.ConnectTimeout = 2000; o.AsyncTimeout = 1000; o.SyncTimeout = 1000; });
+else
+    builder.Services.AddDistributedMemoryCache();   // запуск без Aspire
+builder.Services.AddSingleton<CacheMetrics>();
+builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
+builder.Services.AddHostedService<CacheWarmupService>();
+builder.AddCacheHealthCheck();
+
+builder.Services.AddGrpc(o =>
+{
+    o.Interceptors.Add<GrpcLoggingInterceptor>();
+    o.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -61,5 +86,6 @@ app.UseSwaggerUI();
 
 app.MapDefaultEndpoints();                     // /health і /alive
 app.MapControllers();
+app.MapGrpcService<CatalogGrpcService>();      // endpoint "grpc" (HTTP/2) із Kestrel:Endpoints
 
 app.Run();

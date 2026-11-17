@@ -845,3 +845,139 @@ Typed HttpClients зареєстровані з `BaseAddress = https+http://orde
 | Typed HttpClients через service discovery | `Platform.Aggregator/Clients/`, `Program.cs` |
 | `Task.WhenAll`, CancellationToken, часткові відмови з warnings | `Platform.Aggregator/Services/OrderCardService.cs` |
 | Композитний DTO (camelCase, без null) | `Platform.Aggregator/Models/FullOrderDto.cs`, `Program.cs` |
+
+---
+
+# Лаб. 06 — gRPC і кешування: IMemoryCache + Redis, Aggregator на gRPC
+
+Платформа з Лаб. 05 отримала дворівневий кеш (L1 — пам'ять, L2 — Redis) у трьох сервісах, gRPC-контракти й сервіси, а Aggregator опитує сервіси паралельно через gRPC.
+
+## Запуск
+
+Як у Лаб. 05: потрібен запущений Docker Desktop (Redis Aspire піднімає сам).
+
+```bash
+dotnet run --project Platform.AppHost --launch-profile http
+```
+
+У Dashboard має з'явитися ресурс `redis` у стані Running. Gateway: http://localhost:5000.
+
+## Що додано
+
+```
+Platform.AppHost/AppHost.cs                 AddRedis("redis").WithDataVolume(...), WithReference(redis).WaitFor(redis)
+Platform.ServiceDefaults/                   GrpcLoggingInterceptor.cs, CacheHealthCheck.cs, Meter-и кешу в Extensions.cs
+Platform.Aggregator/
+  Services/OrderCardService.cs              gRPC-клієнти, Task.WhenAll, часткові відмови, кеш агрегованої відповіді
+  Services/HttpOrderCardService.cs          HTTP-реалізація Лаб. 05 — база для порівняння
+  Services/OrderCardAssembler.cs            збирання картки, спільне для обох транспортів
+  Caching/OrderCardCache.cs                 кеш карток у Redis, TTL 30 с
+Services/Orders/Orders.Api/  Protos/orders.proto, Grpc/OrdersGrpcService.cs
+Services/Orders/Orders.Bll/Caching/         TwoLevelCache, CacheMetrics, OrdersCache
+Services/Catalog/Catalog.Api/  Protos/catalog.proto, Grpc/CatalogGrpcService.cs
+Services/Catalog/Catalog.Bll/Caching/       TwoLevelCache, CacheMetrics, CatalogCache, CacheWarmupService
+Services/Reviews/Reviews.WebApi/  Protos/reviews.proto, Grpc/ReviewsGrpcService.cs
+Services/Reviews/Reviews.Application/Caching/  TwoLevelCache, CacheMetrics, ReviewsCache (CachingBehavior, інвалідатор)
+scripts/compare-http-grpc.ps1               вимірювання затримок HTTP і gRPC
+```
+
+Класи `TwoLevelCache` і `CacheMetrics` навмисно лежать у кожному сервісі окремо: мікросервіси не ділять між собою бізнес-бібліотек.
+
+## Кешування
+
+Схема читання (cache-aside): **L1 (IMemoryCache) → L2 (Redis) → база даних**; рівні заповнюються на зворотному шляху. L1 завжди живе коротше за L2. `AddMemoryCache` задає `SizeLimit = 10 000`, кожен запис має `Size`, sliding і absolute expiration, DTO в Redis серіалізуються через System.Text.Json.
+
+| Сервіс | Ключі | L1 (sliding / absolute) | L2 (Redis) |
+|---|---|---|---|
+| Catalog | `catalog:product:{id}` | 30 с / 1 хв | 10 хв |
+| Catalog | `catalog:categories:all`, `catalog:brands:all` (прогріваються на старті) | 2 хв / 5 хв | 1 год |
+| Catalog | `catalog:products:list:v{версія}:...`, `catalog:category:{id}:v{версія}` | 15 с / 30 с | 5 хв |
+| Orders | `orders:product:{id}` | 30 с / 1 хв | 10 хв |
+| Orders | `orders:products:list:v{версія}:...` | 15 с / 30 с | 5 хв |
+| Orders | `orders:statistics` | 5 с / 10 с | 60 с |
+| Reviews | `reviews:product:{id}:rating` | 30 с / 1 хв | 10 хв |
+| Reviews | `reviews:list:v{версія}:...` | 15 с / 30 с | 5 хв |
+| Aggregator | `aggregator:order:{id}:full` | — | 30 с |
+
+- **Персональні дані не кешуються**: замовлення з контактами покупця читаються з БД, у кеш Orders потрапляють лише довідник товарів і знеособлена статистика. Картка в Aggregator містить тільки ім'я покупця і живе 30 с.
+- **Інвалідація** виконується синхронно після запису й логується з причиною (`Cache invalidated {CacheKey}, reason {Reason}`). Списки інвалідуються разом зміною ключа-версії.
+- **Агрегована картка** перевіряється в Redis до gRPC-викликів, часткові відповіді не кешуються. Зміна статусу замовлення одразу видаляє його картку; зміни товарів і відгуків стають видимими в картці не пізніше ніж за 30 с (TTL).
+- **Збій Redis** не зупиняє сервіс: L2 пропускається на 15 с, `/health` показує `Degraded`, а інвалідації, які не вдалося виконати, застосовуються після повернення Redis, щоб не читати застарілі дані.
+- Статистика кешу (записи, hit ratio, доступність L2) — у JSON-відповіді `/health` кожного сервісу.
+
+## gRPC
+
+| Сервіс | Контракт | RPC |
+|---|---|---|
+| orders-api | `Orders.Api/Protos/orders.proto` | `GetOrder` |
+| catalog-api | `Catalog.Api/Protos/catalog.proto` | `GetProduct`, `GetProductsByIds` |
+| reviews-api | `Reviews.WebApi/Protos/reviews.proto` | `GetForProducts`, `GetProductRating` |
+
+gRPC-сервіси — адаптери над BLL/Application: вони викликають ті самі сервіси, що й контролери, тому кеш працює для обох протоколів. Доменні винятки перетворюються на `NotFound` / `InvalidArgument`. Гроші передаються повідомленням `Money` (units + nanos) без втрати точності.
+
+**HTTP/2.** Кожен сервіс має два endpoint-и в секції `Kestrel:Endpoints` свого `appsettings.json`: `http` (HTTP/1.1, REST через Gateway) і `grpc` (лише HTTP/2 без TLS). Aspire читає їх і передає логічні адреси; Aggregator звертається до іменованого endpoint-а: `http://_grpc.catalog-api`. Завдяки цьому не потрібен довірений HTTPS-сертифікат.
+
+Клієнти створює фабрика HttpClient, тому `ServiceDefaults` автоматично додає service discovery, resilience і `X-Correlation-Id` у метадані gRPC-викликів. Для кожного виклику задано дедлайн 4 с.
+
+## Сценарії перевірки
+
+```bash
+# 1. Кеш: у trace другого запиту немає SQL- і Redis-span
+curl.exe -i http://localhost:5000/api/products/2
+curl.exe -i http://localhost:5000/api/products/2
+
+# 2. Інвалідація: наступний GET повертає нову ціну
+curl.exe -i -X PUT http://localhost:5000/api/products/2/price -H "Content-Type: application/json" -d "{\"price\":2300}"
+curl.exe -i http://localhost:5000/api/products/2
+
+# 3. Агрегація через gRPC (повторний запит протягом 30 с — із Redis)
+curl.exe -i -H "X-Correlation-Id: demo-123" http://localhost:5000/api/aggregator/orders/1/full
+
+# 4. Статистика кешу
+curl.exe http://localhost:5081/health
+```
+
+- **Часткова відповідь:** зупиніть `catalog-api` у Dashboard — запит до Aggregator поверне 200 з `"warnings": ["catalog-api is unavailable"]` приблизно за 4 с (дедлайн gRPC), така відповідь не кешується.
+- **Зупинка Redis:** зупиніть `redis` у Dashboard — сервіси відповідають далі, `/health` показує `Degraded`.
+
+## Обсервабіліті в Dashboard
+
+- **Traces:** `gateway → aggregator → BuildOrderCard → RPC orders.OrdersService/GetOrder → POST /orders.OrdersService/GetOrder → SELECT...`; виклики `RPC catalog.CatalogService/GetProductsByIds` і `RPC reviews.ReviewsService/GetForProducts` ідуть паралельно. Клієнтські й серверні spans пов'язані як батько–нащадок, операції Redis видно окремими spans.
+- **Structured logs:** фільтр `CorrelationId = <значення>` знаходить записи всіх сервісів; `GrpcLoggingInterceptor` пише метод, peer, статус і тривалість; записи кешу мають `CacheKey`, `CacheLevel`, а всередині gRPC-викликів — ще й `Transport = grpc`.
+- **Metrics:** Meter-и `Catalog.Cache`, `Orders.Cache`, `Reviews.Cache`, `Platform.Aggregator.Cache`: `cache.hits` і `cache.misses` з тегом `cache.level` (L1/L2), `cache.hit_ratio`, `cache.invalidations`, `cache.evictions`, `cache.operation.duration`, `cache.memory.entries`, `cache.memory.size`.
+
+## Порівняння HTTP і gRPC
+
+`scripts/compare-http-grpc.ps1` чергує запити до `/api/aggregator/orders/1/full/http` (Лаб. 05) і `/api/aggregator/orders/1/full?noCache=true` (gRPC), кеш агрегованих відповідей вимкнено. Час — для пачки одночасних запитів, через Gateway, усе на одному комп'ютері, 80 пачок на вимір, середнє двох вимірів:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/compare-http-grpc.ps1 -Requests 80 -WarmUp 10 -Concurrency 16
+```
+
+| Одночасних запитів | HTTP, середнє | gRPC, середнє | Різниця |
+|---|---|---|---|
+| 1 | 9,4 мс | 9,6 мс | немає (у межах похибки) |
+| 8 | 19,9 мс | 15,9 мс | gRPC швидший на ~20 % |
+| 16 | 40,8 мс | 29,9 мс | gRPC швидший на ~27 % |
+| 32 | 89,1 мс | 61,6 мс | gRPC швидший на ~31 % |
+
+Для одиночних запитів на localhost виграшу немає: мережа майже не додає затримки, а дані сервіси й так віддають із кешу. Перевага з'являється під паралельним навантаженням завдяки мультиплексуванню HTTP/2 і тому, що gRPC-версія робить 3 виклики замість 7 (пакетні `GetProductsByIds` і `GetForProducts`).
+
+## Відповідність критеріям
+
+| Критерій | Де |
+|---|---|
+| Redis в AppHost із постійним сховищем і посиланнями | `Platform.AppHost/AppHost.cs` |
+| `.proto` підключені (Server / Client) | `*.Api.csproj`, `Reviews.WebApi.csproj`, `Platform.Aggregator.csproj` |
+| IMemoryCache з обмеженням розміру й витісненням | `Program.cs` сервісів, `Caching/TwoLevelCache.cs` (`SetL1`) |
+| Cache-aside із передбачуваними ключами, логування hit / miss | `Caching/TwoLevelCache.cs`, `CatalogCache.cs`, `OrdersCache.cs`, `ReviewsCache.cs` |
+| Інвалідація одразу після запису | `Catalog.Bll/Services/`, `Orders.Bll/Services/`, `Reviews.Application/Reviews/Commands/` |
+| IDistributedCache поверх Redis через Aspire | `AddRedisDistributedCache("redis")` у `Program.cs`, `Caching/TwoLevelCache.cs` |
+| Дворівневий кеш L1 → L2 → БД | `Caching/TwoLevelCache.cs` (`GetOrCreateAsync`) |
+| Контракти Protocol Buffers | `Protos/*.proto` |
+| gRPC-сервіси як адаптери, коректні RpcException | `Grpc/*GrpcService.cs`, `AddGrpc` / `MapGrpcService` у `Program.cs` |
+| Типізовані gRPC-клієнти Aggregator | `Platform.Aggregator/Program.cs` (`AddGrpcClient`) |
+| Паралельні виклики й часткові відмови | `Platform.Aggregator/Services/OrderCardService.cs` |
+| Кеш агрегованої відповіді з коротким TTL | `Platform.Aggregator/Caching/OrderCardCache.cs` |
+| Серверний interceptor | `Platform.ServiceDefaults/GrpcLoggingInterceptor.cs` |
+| Метрики попадань і промахів через Meter | `Caching/CacheMetrics.cs`, `Platform.ServiceDefaults/Extensions.cs` (`CacheMeters`) |

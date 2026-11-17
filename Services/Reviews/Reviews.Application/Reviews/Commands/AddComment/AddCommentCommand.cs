@@ -2,6 +2,7 @@ using AutoMapper;
 using FluentValidation;
 using MediatR;
 using MongoDB.Bson;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Interfaces;
 using Reviews.Application.Common.Validation;
 using Reviews.Domain.Entities;
@@ -13,7 +14,7 @@ namespace Reviews.Application.Reviews.Commands.AddComment;
 /// <summary>Додає короткий коментар у вкладений масив comments (до 50 у документі).</summary>
 public sealed record AddCommentCommand(string ReviewId, string Author, string Text) : ICommand<ReviewDetailsDto>;
 
-public sealed class AddCommentCommandHandler(IReviewRepository reviews, IMapper mapper)
+public sealed class AddCommentCommandHandler(IReviewRepository reviews, IMapper mapper, ReviewsCacheInvalidator cacheInvalidator)
     : IRequestHandler<AddCommentCommand, ReviewDetailsDto>
 {
     public async Task<ReviewDetailsDto> Handle(AddCommentCommand cmd, CancellationToken ct)
@@ -23,6 +24,7 @@ public sealed class AddCommentCommandHandler(IReviewRepository reviews, IMapper 
 
         review.AddComment(cmd.Author, cmd.Text);
         await reviews.UpdateAsync(review, ct);
+        await cacheInvalidator.ListsChangedAsync("ReviewCommentAdded");             // у списках є CommentsCount
         return mapper.Map<ReviewDetailsDto>(review);
     }
 }

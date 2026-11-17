@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+option csharp_namespace = "Orders.Grpc";
+
+package orders;
+
+import "google/protobuf/timestamp.proto";
+
+// Читання замовлень для внутрішніх сервісів платформи.
+// Номери полів не змінюються після публікації: саме вони визначають бінарний формат.
+service OrdersService {
+  // Замовлення з позиціями; NOT_FOUND, якщо його немає.
+  rpc GetOrder (GetOrderRequest) returns (OrderReply);
+}
+
+message GetOrderRequest {
+  int64 id = 1;
+}
+
+// Грошова сума без втрати точності: units + nanos / 10^9.
+message Money {
+  int64 units = 1;
+  int32 nanos = 2;
+}
+
+message CustomerSummary {
+  int64 id = 1;
+  string full_name = 2;
+}
+
+message DeliverySummary {
+  string recipient_name = 1;
+  string city = 2;
+  string delivery_method = 3;
+}
+
+message OrderItemOption {
+  int64 option_id = 1;
+  string option_group = 2;
+  string option_value = 3;
+  Money price_delta = 4;
+}
+
+// Позиція замовлення: назва й ціна — знімок на момент оформлення.
+message OrderItem {
+  int64 id = 1;
+  int64 product_id = 2;
+  string product_name = 3;
+  Money unit_price = 4;
+  int32 units = 5;
+  Money discount = 6;
+  Money line_total = 7;
+  repeated OrderItemOption options = 8;
+}
+
+message OrderReply {
+  int64 id = 1;
+  int64 customer_id = 2;
+  string status = 3;
+  google.protobuf.Timestamp order_date = 4;
+  google.protobuf.Timestamp paid_at = 5;
+  google.protobuf.Timestamp shipped_at = 6;
+  Money total_amount = 7;
+  CustomerSummary customer = 8;
+  DeliverySummary delivery = 9;
+  repeated OrderItem items = 10;
+}

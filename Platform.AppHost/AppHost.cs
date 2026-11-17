@@ -23,10 +23,17 @@ builder.Eventing.Subscribe<ResourceReadyEvent>(ordersDb.Resource, async (@event,
     await DatabaseInitializer.ApplyAsync(connectionString, scriptsDirectory, cancellationToken);
 });
 
+// Redis (Лаб. 06): розподілений кеш L2 із постійним volume; сервіси отримують ConnectionStrings:redis через WithReference.
+var redis = builder.AddRedis("redis")
+    .WithDataVolume("customshop-redis");
+
+// Endpoint-и сервісів ("http" для REST і "grpc" лише з HTTP/2) Aspire бере із секції Kestrel:Endpoints їхніх appsettings.json.
 var orders = builder.AddProject<Projects.Orders_Api>("orders-api")
     .WithReference(ordersDb)
     .WaitFor(ordersDb)
-    .WithHttpHealthCheck("/health");
+    .WithReference(redis)
+    .WaitFor(redis)
+    .WithHttpHealthCheck("/health", endpointName: "http");
 
 // Каталог (Лаб. 03): схему створюють міграції EF Core, сідінг — сам Catalog.Api на старті.
 var catalogDb = sql.AddDatabase("CatalogDb", "CustomShop_Catalog");
@@ -34,7 +41,9 @@ var catalogDb = sql.AddDatabase("CatalogDb", "CustomShop_Catalog");
 var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WithReference(catalogDb)
     .WaitFor(catalogDb)
-    .WithHttpHealthCheck("/health");
+    .WithReference(redis)
+    .WaitFor(redis)
+    .WithHttpHealthCheck("/health", endpointName: "http");
 
 // Відгуки (Лаб. 04): MongoDB у контейнері з постійним volume; індекси й seed створює сам reviews-api на старті.
 var mongo = builder.AddMongoDB("mongo")
@@ -44,13 +53,17 @@ var reviewsDb = mongo.AddDatabase("ReviewsDb", "customshop_reviews");
 var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WithReference(reviewsDb)
     .WaitFor(reviewsDb)
-    .WithHttpHealthCheck("/health");
+    .WithReference(redis)
+    .WaitFor(redis)
+    .WithHttpHealthCheck("/health", endpointName: "http");
 
-// Aggregator (Лаб. 05): паралельно опитує сервіси; стартує після них.
-// WithReference(orders) дає змінні services__orders-api__http__0 → service discovery за іменем "orders-api".
+// Aggregator (Лаб. 05–06): паралельно опитує сервіси через gRPC; стартує після них і Redis.
+// WithReference(orders) дає змінні services__orders-api__grpc__0 → service discovery за адресою http://_grpc.orders-api.
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WithReference(orders).WithReference(catalog).WithReference(reviews)
     .WaitFor(orders).WaitFor(catalog).WaitFor(reviews)
+    .WithReference(redis)
+    .WaitFor(redis)
     .WithHttpHealthCheck("/health");
 
 // API Gateway (YARP) — єдина точка входу з фіксованим портом 5000; маршрутизує до всіх сервісів і Aggregator.

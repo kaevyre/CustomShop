@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+option csharp_namespace = "Reviews.Grpc";
+
+package reviews;
+
+import "google/protobuf/timestamp.proto";
+
+// Читання відгуків для внутрішніх сервісів платформи.
+// Номери полів не змінюються після публікації: саме вони визначають бінарний формат.
+service ReviewsService {
+  // Рейтинг і останні відгуки на кожен із товарів.
+  rpc GetForProducts (GetForProductsRequest) returns (ReviewsForProductsReply);
+
+  // Рейтинг одного товару; NOT_FOUND, якщо відгуків ще немає.
+  rpc GetProductRating (GetProductRatingRequest) returns (ProductRatingReply);
+}
+
+message GetForProductsRequest {
+  repeated int64 product_ids = 1;
+  // Скільки останніх відгуків повернути на товар (за замовчуванням 3).
+  int32 latest_per_product = 2;
+}
+
+message GetProductRatingRequest {
+  int64 product_id = 1;
+}
+
+message ProductRatingReply {
+  int64 product_id = 1;
+  int32 reviews_count = 2;
+  double average_rating = 3;
+}
+
+message ReviewReply {
+  string id = 1;
+  int64 product_id = 2;
+  string author_name = 3;
+  int32 rating = 4;
+  optional string title = 5;
+  string text = 6;
+  bool verified_purchase = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message ProductReviews {
+  int64 product_id = 1;
+  // Відсутній, якщо відгуків на товар ще немає.
+  optional double average_rating = 2;
+  int64 total_count = 3;
+  repeated ReviewReply latest = 4;
+}
+
+message ReviewsForProductsReply {
+  repeated ProductReviews products = 1;
+}
