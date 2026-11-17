@@ -1,7 +1,10 @@
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Reviews.Application;
 using Reviews.Infrastructure;
+using Reviews.Infrastructure.Persistence;
 using Reviews.WebApi;
 using Reviews.WebApi.Grpc;
+using Reviews.WebApi.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
 // Лаб. 05: Serilog (рівні — із секції "Serilog" appsettings.json), OpenTelemetry, health checks, service discovery
@@ -19,7 +22,10 @@ if (!string.IsNullOrEmpty(builder.Configuration.GetConnectionString("redis")))
         o => { o.AbortOnConnectFail = false; o.ConnectTimeout = 2000; o.AsyncTimeout = 1000; o.SyncTimeout = 1000; });
 else
     builder.Services.AddDistributedMemoryCache();   // запуск без Aspire
-builder.AddCacheHealthCheck();
+builder.AddCacheHealthCheck();                   // Лаб. 07: redis-cache — Degraded, а не Unhealthy (кеш необов'язковий)
+
+// Лаб. 07: бізнес-метрики (Meter "Reviews.Api" через IMeterFactory; Singleton)
+builder.Services.AddSingleton<ReviewMetrics>();
 
 builder.Services.AddGrpc(o =>
 {
@@ -33,6 +39,18 @@ builder.Services
     .AddInfrastructure(builder.Configuration)    // MongoDB: контекст, BsonClassMap, репозиторії, індекси, сідінг
     .AddWebApi();                                // контролери, Swagger, ProblemDetails
 
+// Лаб. 07: health check MongoDB (команда ping) — ім'я й теги для Dashboard і /health/ready, таймаут 5 с
+builder.Services.AddHealthChecks()
+    .AddCheck<MongoHealthCheck>(
+        name: "reviews-db",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: ["database", "mongodb", "ready"],
+        timeout: TimeSpan.FromSeconds(5));
+
+// Лаб. 07: стандартний gRPC Health Checking Protocol; статус сервісу "" залежить лише від перевірок бази (Redis — Degraded)
+builder.Services.AddGrpcHealthChecks(o =>
+    o.Services.Map("", check => check.Tags.Contains("database")));
+
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();  // X-Correlation-Id → LogContext і заголовок відповіді
@@ -41,9 +59,10 @@ app.UseExceptionHandler();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapDefaultEndpoints();                     // /health і /alive (включно з перевіркою MongoDB)
+app.MapDefaultEndpoints();                     // /health, /alive, /health/live, /health/ready (включно з перевіркою MongoDB), /health/startup
 app.MapControllers();
 app.MapGrpcService<ReviewsGrpcService>();      // endpoint "grpc" (HTTP/2) із Kestrel:Endpoints
+app.MapGrpcHealthChecksService();              // grpc.health.v1.Health: Check/Watch для Aggregator
 
 app.Run();
 

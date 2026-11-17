@@ -6,6 +6,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- RemoveAllResilienceHandlers із Microsoft.Extensions.Http.Resilience позначено як експериментальний API (EXTEXP0001); він передбачений методичкою (Лаб. 07, 1.2) -->
+    <NoWarn>$(NoWarn);EXTEXP0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +17,8 @@
     <PackageReference Include="Google.Protobuf" Version="3.33.0" />
     <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="All" />
     <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.2" />
+    <!-- Лаб. 07: клієнт стандартного gRPC Health Checking Protocol (health checks залежностей Aggregator) -->
+    <PackageReference Include="Grpc.HealthCheck" Version="2.76.0" />
   </ItemGroup>
 
   <ItemGroup>

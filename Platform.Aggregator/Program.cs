@@ -1,10 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Catalog.Grpc;
-using Microsoft.Extensions.Http.Resilience;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Orders.Grpc;
 using Platform.Aggregator.Caching;
 using Platform.Aggregator.Clients;
+using Platform.Aggregator.HealthChecks;
+using Platform.Aggregator.Resilience;
 using Platform.Aggregator.Services;
 using Reviews.Grpc;
 
@@ -14,9 +16,20 @@ builder.AddServiceDefaults();          // Serilog, OpenTelemetry, service discov
 
 // Типізовані gRPC-клієнти (Лаб. 06): "_grpc" — іменований endpoint сервісу лише з HTTP/2, адресу підставляє service discovery.
 // Клієнти створює та сама фабрика HttpClient, тож ServiceDefaults додає resilience і X-Correlation-Id у метадані викликів.
-builder.Services.AddGrpcClient<OrdersService.OrdersServiceClient>(o => o.Address = new Uri("http://_grpc.orders-api"));
-builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"));
-builder.Services.AddGrpcClient<ReviewsService.ReviewsServiceClient>(o => o.Address = new Uri("http://_grpc.reviews-api"));
+//
+// Лаб. 07: політики resilience різні для критичних (Каталог, Замовлення) і некритичного (Відгуки) сервісів — див. ResilienceProfiles
+// і таблицю обґрунтування в README.md. AddAggregatorResilience спершу прибирає стандартний обробник з ServiceDefaults
+// (RemoveAllResilienceHandlers), тож обробники не нашаровуються. AddGrpcRetry додає retry за gRPC-статусами
+// (Unavailable, ResourceExhausted): HTTP-обробник їх не бачить, бо gRPC повертає їх у трейлерах відповіді з HTTP 200.
+builder.Services.AddGrpcClient<OrdersService.OrdersServiceClient>(o => o.Address = new Uri("http://_grpc.orders-api"))
+    .AddAggregatorResilience(ResilienceProfiles.Orders)
+    .AddGrpcRetry(ResilienceProfiles.Orders);
+builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"))
+    .AddAggregatorResilience(ResilienceProfiles.Catalog)
+    .AddGrpcRetry(ResilienceProfiles.Catalog);
+builder.Services.AddGrpcClient<ReviewsService.ReviewsServiceClient>(o => o.Address = new Uri("http://_grpc.reviews-api"))
+    .AddAggregatorResilience(ResilienceProfiles.Reviews)
+    .AddGrpcRetry(ResilienceProfiles.Reviews);
 
 // Агреговані відповіді кешуються в Redis (ConnectionStrings:redis від Aspire)
 if (!string.IsNullOrEmpty(builder.Configuration.GetConnectionString("redis")))
@@ -28,20 +41,25 @@ builder.Services.AddSingleton<AggregatorCacheMetrics>();
 builder.Services.AddSingleton<OrderCardCache>();
 
 // Typed HttpClients (Лаб. 05) лишаються для порівняння затримок HTTP і gRPC: /api/aggregator/orders/{id}/full/http
-builder.Services.AddHttpClient<OrdersClient>(c => c.BaseAddress = new("https+http://orders-api"));
-builder.Services.AddHttpClient<CatalogClient>(c => c.BaseAddress = new("https+http://catalog-api"));
-builder.Services.AddHttpClient<ReviewsClient>(c => c.BaseAddress = new("https+http://reviews-api"));
+// Ті самі політики, що й для gRPC-клієнтів тих самих сервісів: критичні — Замовлення й Каталог, некритичний — Відгуки.
+builder.Services.AddHttpClient<OrdersClient>(c => c.BaseAddress = new("https+http://orders-api"))
+    .AddAggregatorResilience(ResilienceProfiles.Orders);
+builder.Services.AddHttpClient<CatalogClient>(c => c.BaseAddress = new("https+http://catalog-api"))
+    .AddAggregatorResilience(ResilienceProfiles.Catalog);
+builder.Services.AddHttpClient<ReviewsClient>(c => c.BaseAddress = new("https+http://reviews-api"))
+    .AddAggregatorResilience(ResilienceProfiles.Reviews);
 
-// Агрегатор має відповідати швидко навіть коли сервіс лежить: коротші тайм-аути й менше повторів,
-// ніж у стандартному resilience handler з ServiceDefaults (детально — Лаб. 07)
-builder.Services.ConfigureAll<HttpStandardResilienceOptions>(o =>
-{
-    o.Retry.MaxRetryAttempts = 2;
-    o.Retry.Delay = TimeSpan.FromMilliseconds(200);
-    o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(2);
-    o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(5);
-    o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(10);
-});
+// Лаб. 07: health checks залежностей Aggregator. Кожен сервіс відповідає на стандартний gRPC Health Checking Protocol
+// (Check); недоступність сервісу = Unhealthy, недоступність Redis = Degraded (кеш необов'язковий).
+builder.Services.AddGrpcDependencyHealthCheck(OrdersClient.ServiceName, "http://_grpc.orders-api");
+builder.Services.AddGrpcDependencyHealthCheck(CatalogClient.ServiceName, "http://_grpc.catalog-api");
+builder.Services.AddGrpcDependencyHealthCheck(ReviewsClient.ServiceName, "http://_grpc.reviews-api");
+builder.Services.AddHealthChecks()
+    .AddCheck<RedisCacheHealthCheck>(
+        name: "redis-cache",
+        failureStatus: HealthStatus.Degraded,
+        tags: ["cache", "redis", "ready"],
+        timeout: TimeSpan.FromSeconds(3));
 
 builder.Services.AddScoped<OrderCardService>();
 builder.Services.AddScoped<HttpOrderCardService>();
@@ -59,6 +77,9 @@ builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+// callback-и circuit breaker логують через ILoggerFactory, який доступний лише після Build()
+ResilienceLogging.Initialize(app.Services.GetRequiredService<ILoggerFactory>());
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();

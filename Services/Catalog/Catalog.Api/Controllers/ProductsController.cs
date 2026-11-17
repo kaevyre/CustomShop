@@ -1,3 +1,4 @@
+using Catalog.Api.Metrics;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
 using FluentValidation;
@@ -10,10 +11,12 @@ namespace Catalog.Api.Controllers;
 public sealed class ProductsController : ControllerBase
 {
     private readonly IProductService _products;
+    private readonly CatalogMetrics _metrics;
 
-    public ProductsController(IProductService products)
+    public ProductsController(IProductService products, CatalogMetrics metrics)
     {
         _products = products;
+        _metrics = metrics;
     }
 
     /// <summary>Список з пагінацією, фільтрами й сортуванням; метадані — в тілі і в заголовках X-Total-Count, X-Total-Pages.</summary>
@@ -32,7 +35,7 @@ public sealed class ProductsController : ControllerBase
 
     [HttpGet("{id:long}")]
     public async Task<ActionResult<ProductDetailsDto>> GetById(long id, CancellationToken ct) =>
-        Ok(await _products.GetByIdAsync(id, ct));
+        Ok(await _metrics.MeasureAsync("get", () => _products.GetByIdAsync(id, ct)));
 
     [HttpPost]
     public async Task<ActionResult<ProductDetailsDto>> Create(
@@ -41,7 +44,8 @@ public sealed class ProductsController : ControllerBase
         if (await this.ValidateAsync(validator, dto, ct) is { } invalid)
             return invalid;
 
-        var created = await _products.CreateAsync(dto, ct);
+        var created = await _metrics.MeasureAsync("create", () => _products.CreateAsync(dto, ct));
+        _metrics.ProductCreated(created.ProductType);       // лічильник — лише після успішного створення
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -52,16 +56,26 @@ public sealed class ProductsController : ControllerBase
         if (await this.ValidateAsync(validator, dto, ct) is { } invalid)
             return invalid;
 
-        return Ok(await _products.ChangePriceAsync(id, dto, ct));
+        var product = await _metrics.MeasureAsync("change_price", () => _products.ChangePriceAsync(id, dto, ct));
+        _metrics.ProductUpdated("price");
+        return Ok(product);
     }
 
     [HttpPost("{id:long}/stock/add")]
-    public async Task<ActionResult<ProductDto>> AddStock(long id, StockChangeDto dto, CancellationToken ct) =>
-        Ok(await _products.AddStockAsync(id, dto, ct));
+    public async Task<ActionResult<ProductDto>> AddStock(long id, StockChangeDto dto, CancellationToken ct)
+    {
+        var product = await _metrics.MeasureAsync("stock", () => _products.AddStockAsync(id, dto, ct));
+        _metrics.ProductUpdated("stock_add");
+        return Ok(product);
+    }
 
     [HttpPost("{id:long}/stock/remove")]
-    public async Task<ActionResult<ProductDto>> RemoveStock(long id, StockChangeDto dto, CancellationToken ct) =>
-        Ok(await _products.RemoveStockAsync(id, dto, ct));
+    public async Task<ActionResult<ProductDto>> RemoveStock(long id, StockChangeDto dto, CancellationToken ct)
+    {
+        var product = await _metrics.MeasureAsync("stock", () => _products.RemoveStockAsync(id, dto, ct));
+        _metrics.ProductUpdated("stock_remove");
+        return Ok(product);
+    }
 
     [HttpPost("{id:long}/categories")]
     public async Task<IActionResult> AssignCategory(long id, AssignCategoryDto dto, CancellationToken ct)
