@@ -11,6 +11,7 @@ using Reviews.Application.Reviews.Queries.GetReviewById;
 using Reviews.Application.Reviews.Queries.GetReviewsFeed;
 using Reviews.Application.Reviews.Queries.GetReviewsList;
 using Reviews.WebApi.Contracts;
+using Reviews.WebApi.Metrics;
 
 namespace Reviews.WebApi.Controllers;
 
@@ -53,17 +54,20 @@ public sealed class ReviewsController : ApiControllerBase
     [HttpGet("products/{productId:long}/rating")]
     [ProducesResponseType<ProductRatingDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ProductRatingDto>> GetProductRating(long productId, CancellationToken ct)
-        => Ok(await Mediator.Send(new GetProductRatingQuery(productId), ct));
+    public async Task<ActionResult<ProductRatingDto>> GetProductRating(
+        long productId, [FromServices] ReviewMetrics metrics, CancellationToken ct)
+        => Ok(await metrics.MeasureAsync("rating", () => Mediator.Send(new GetProductRatingQuery(productId), ct)));
 
     /// <summary>Створення відгуку; 201 + Location з рядковим ObjectId. Повторний відгук автора на товар — 400/409.</summary>
     [HttpPost]
     [ProducesResponseType<CreatedResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<CreatedResponse>> Create(CreateReviewCommand command, CancellationToken ct)
+    public async Task<ActionResult<CreatedResponse>> Create(
+        CreateReviewCommand command, [FromServices] ReviewMetrics metrics, CancellationToken ct)
     {
-        var id = await Mediator.Send(command, ct);
+        var id = await metrics.MeasureAsync("create", () => Mediator.Send(command, ct));
+        metrics.ReviewCreated(command.Rating);          // лічильник — лише після успішного створення
         return CreatedAtAction(nameof(GetById), new { id }, new CreatedResponse(id));
     }
 

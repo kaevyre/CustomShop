@@ -1,5 +1,6 @@
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using Orders.Api.Metrics;
 using Orders.Bll.Dtos;
 using Orders.Bll.Services;
 using Orders.Domain.Exceptions;
@@ -8,7 +9,7 @@ using Orders.Grpc;
 namespace Orders.Api.Grpc;
 
 /// <summary>gRPC-адаптер над BLL (як контролер): перетворює DTO на повідомлення, а доменні винятки — на RpcException.</summary>
-public sealed class OrdersGrpcService(IOrderService orders) : OrdersService.OrdersServiceBase
+public sealed class OrdersGrpcService(IOrderService orders, OrderMetrics metrics) : OrdersService.OrdersServiceBase
 {
     public override async Task<OrderReply> GetOrder(GetOrderRequest request, ServerCallContext context)
     {
@@ -17,7 +18,7 @@ public sealed class OrdersGrpcService(IOrderService orders) : OrdersService.Orde
 
         try
         {
-            return ToReply(await orders.GetAsync(request.Id, context.CancellationToken));
+            return ToReply(await metrics.MeasureAsync("get", () => orders.GetAsync(request.Id, context.CancellationToken)));
         }
         catch (NotFoundException ex)
         {

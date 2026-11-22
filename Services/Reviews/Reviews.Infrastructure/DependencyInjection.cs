@@ -42,7 +42,7 @@ public static class DependencyInjection
         services.AddSingleton<IDataSeeder, BuildSeeder>();
         services.AddHostedService<MongoInitializationHostedService>();
 
-        services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb", tags: ["db", "mongodb"]);
+        // health check MongoDB (reviews-db) реєструється в Reviews.WebApi/Program.cs: ім'я, теги й таймаут
         return services;
     }
 }

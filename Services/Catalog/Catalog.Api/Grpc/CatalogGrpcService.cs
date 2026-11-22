@@ -1,3 +1,4 @@
+using Catalog.Api.Metrics;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
 using Catalog.Domain.Exceptions;
@@ -10,7 +11,7 @@ namespace Catalog.Api.Grpc;
 /// gRPC-адаптер над BLL (як контролер): викликає той самий IProductService, тож кеш працює для REST і gRPC без дублювання.
 /// Доменні винятки перетворюються на RpcException з точним кодом, а не на загальний Internal.
 /// </summary>
-public sealed class CatalogGrpcService(IProductService products) : CatalogService.CatalogServiceBase
+public sealed class CatalogGrpcService(IProductService products, CatalogMetrics metrics) : CatalogService.CatalogServiceBase
 {
     private const int MaxIds = 100;
 
@@ -21,7 +22,7 @@ public sealed class CatalogGrpcService(IProductService products) : CatalogServic
 
         try
         {
-            return ToReply(await products.GetByIdAsync(request.Id, context.CancellationToken));
+            return ToReply(await metrics.MeasureAsync("get", () => products.GetByIdAsync(request.Id, context.CancellationToken)));
         }
         catch (EntityNotFoundException ex)
         {

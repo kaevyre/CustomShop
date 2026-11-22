@@ -1,5 +1,7 @@
 using System.Globalization;
 using Catalog.Api.Grpc;
+using Catalog.Api.HealthChecks;
+using Catalog.Api.Metrics;
 using Catalog.Api.Middleware;
 using Catalog.Bll.Caching;
 using Catalog.Bll.Mapping;
@@ -11,6 +13,7 @@ using Catalog.Dal.Seeding;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 // Лаб. 05: Serilog (рівні — як і раніше, із секції "Serilog" appsettings.json), OpenTelemetry, health checks
@@ -49,13 +52,28 @@ else
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
 builder.Services.AddHostedService<CacheWarmupService>();
-builder.AddCacheHealthCheck();
+builder.AddCacheHealthCheck();                // Лаб. 07: redis-cache — Degraded, а не Unhealthy (кеш необов'язковий)
+
+// Лаб. 07: бізнес-метрики (Meter "Catalog.Api" через IMeterFactory; Singleton)
+builder.Services.AddSingleton<CatalogMetrics>();
+
+// Лаб. 07: health check бази каталогу — ім'я й теги для Dashboard і /health/ready, таймаут 5 с
+builder.Services.AddHealthChecks()
+    .AddCheck<CatalogDbHealthCheck>(
+        name: "catalog-db",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: ["database", "sql", "ready"],
+        timeout: TimeSpan.FromSeconds(5));
 
 builder.Services.AddGrpc(o =>
 {
     o.Interceptors.Add<GrpcLoggingInterceptor>();
     o.EnableDetailedErrors = builder.Environment.IsDevelopment();
 });
+
+// Лаб. 07: стандартний gRPC Health Checking Protocol; статус сервісу "" залежить лише від перевірок бази (Redis — Degraded)
+builder.Services.AddGrpcHealthChecks(o =>
+    o.Services.Map("", check => check.Tags.Contains("database")));
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -84,8 +102,9 @@ app.UseExceptionHandler();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapDefaultEndpoints();                     // /health і /alive
+app.MapDefaultEndpoints();                     // /health, /alive, /health/live, /health/ready, /health/startup
 app.MapControllers();
 app.MapGrpcService<CatalogGrpcService>();      // endpoint "grpc" (HTTP/2) із Kestrel:Endpoints
+app.MapGrpcHealthChecksService();              // grpc.health.v1.Health: Check/Watch для Aggregator
 
 app.Run();

@@ -33,6 +33,18 @@ public static class Extensions
     /// <summary>Meter-и кешу сервісів (Лаб. 06): лічильники cache.hits / cache.misses з тегом cache.level (L1/L2).</summary>
     public static readonly string[] CacheMeters = ["Catalog.Cache", "Orders.Cache", "Reviews.Cache", "Platform.Aggregator.Cache"];
 
+    /// <summary>
+    /// Meter-и бізнес-метрик сервісів (Лаб. 07): назва Meter відповідає сервісу, щоб у Dashboard метрики були коректно атрибутовані.
+    /// Класи метрик лежать у &lt;Сервіс&gt;.Api/Metrics і створюють Meter через IMeterFactory.
+    /// </summary>
+    public static readonly string[] BusinessMeters = ["Orders.Api", "Catalog.Api", "Reviews.Api"];
+
+    /// <summary>Meter бібліотеки Polly: resilience.polly.strategy.events, resilience.polly.strategy.attempt.duration, resilience.polly.pipeline.duration.</summary>
+    public const string PollyMeter = "Polly";
+
+    /// <summary>Межі кошиків гістограм тривалості операцій у мілісекундах (OpenTelemetry View).</summary>
+    private static readonly double[] DurationBucketsMs = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
+
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.AddSerilogLogging();
@@ -45,7 +57,7 @@ public static class Extensions
 
         builder.Services.ConfigureHttpClientDefaults(http =>
         {
-            http.AddStandardResilienceHandler();                  // retry, timeout, circuit breaker (детально — Лаб. 07)
+            http.AddStandardResilienceHandler();                  // rate limiter, total timeout, retry, circuit breaker, attempt timeout (Лаб. 07: кастомізація — у Aggregator)
             http.AddServiceDiscovery();                           // http://orders-api -> реальна адреса від Aspire
             http.AddHttpMessageHandler<CorrelationIdHandler>();   // той самий X-Correlation-Id у вихідних запитах
         });
@@ -112,7 +124,13 @@ public static class Extensions
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
                 .AddMeter(appName)                                  // власні метрики (напр. Gateway)
-                .AddMeter(CacheMeters))                             // cache.hits / cache.misses (Лаб. 06)
+                .AddMeter(CacheMeters)                              // cache.hits / cache.misses (Лаб. 06)
+                .AddMeter(BusinessMeters)                           // orders.created, products.updated, ... (Лаб. 07)
+                .AddMeter(PollyMeter)                               // метрики resilience: повтори, circuit breaker, таймаути (Лаб. 07)
+                .AddView(instrument => instrument.Name.EndsWith(".operation.duration", StringComparison.Ordinal)
+                    && instrument.Unit == "ms"
+                        ? new ExplicitBucketHistogramConfiguration { Boundaries = DurationBucketsMs }
+                        : null))
             .WithTracing(tracing => tracing
                 .SetSampler(CreateSampler(builder))
                 .AddSource(appName)                                 // власні spans бізнес-операцій
@@ -169,20 +187,52 @@ public static class Extensions
         return builder;
     }
 
-    /// <summary>Статистика кешу в /health; недоступний Redis дає Degraded, а не Unhealthy (Лаб. 06).</summary>
+    /// <summary>
+    /// Health check Redis (Лаб. 06–07): статистика кешу й ping розподіленого кешу. Redis — необов'язкова залежність
+    /// (сервіс читає з бази даних), тому збій дає Degraded, а не Unhealthy. Таймаут 3 с — кеш має бути швидким.
+    /// Тег "ready" включає перевірку в /health/ready, де вона показує Degraded при зупиненому Redis.
+    /// </summary>
     public static TBuilder AddCacheHealthCheck<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
-        builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache", HealthStatus.Degraded, ["cache"]);
+        builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>(
+            name: "redis-cache",
+            failureStatus: HealthStatus.Degraded,                     // кеш необов'язковий
+            tags: ["cache", "redis", "ready"],
+            timeout: TimeSpan.FromSeconds(3));
         return builder;
     }
 
-    /// <summary>/health — усі перевірки (готовність, у т.ч. БД і кеш) у JSON; /alive — лише «live» (процес живий).</summary>
+    /// <summary>
+    /// Endpoint-и стану (доступні в усіх середовищах, а не лише в Development — їх використовують оркестратор і балансувальник):
+    /// <list type="bullet">
+    /// <item>/health/live — liveness: чи живий процес, без зовнішніх залежностей (&lt; 100 мс); збій → перезапуск процесу;</item>
+    /// <item>/health/ready — readiness: усі залежності з тегом "ready" (БД, Redis, gRPC-сервіси), деталі кожної в JSON; збій → виключення з балансування;</item>
+    /// <item>/health/startup — startup: відповідає, коли застосунок завершив старт (міграції й hosted services виконані до запуску Kestrel);</item>
+    /// <item>/health — усі перевірки одразу (для Aspire Dashboard, WithHttpHealthCheck); /alive — сумісність із шаблоном ServiceDefaults.</item>
+    /// </list>
+    /// </summary>
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
         app.MapHealthChecks(HealthEndpointPath, new HealthCheckOptions { ResponseWriter = WriteHealthJsonAsync });
         app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions
         {
             Predicate = r => r.Tags.Contains("live")
+        });
+
+        app.MapHealthChecks($"{HealthEndpointPath}/live", new HealthCheckOptions
+        {
+            Predicate = check => check.Tags.Contains("live"),
+            ResponseWriter = WriteHealthJsonAsync
+        });
+        app.MapHealthChecks($"{HealthEndpointPath}/ready", new HealthCheckOptions
+        {
+            Predicate = check => check.Tags.Contains("ready"),
+            ResponseWriter = WriteHealthJsonAsync                      // деталі кожної перевірки у JSON
+        });
+        app.MapHealthChecks($"{HealthEndpointPath}/startup", new HealthCheckOptions
+        {
+            Predicate = check => check.Tags.Contains("startup"),       // власних перевірок немає: 200, щойно застосунок стартував
+            ResponseWriter = WriteHealthJsonAsync
         });
         return app;
     }
@@ -191,9 +241,17 @@ public static class Extensions
         context.Response.WriteAsJsonAsync(new
         {
             status = report.Status.ToString(),
+            totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
             checks = report.Entries.ToDictionary(
                 entry => entry.Key,
-                entry => new { status = entry.Value.Status.ToString(), description = entry.Value.Description, data = entry.Value.Data })
+                entry => new
+                {
+                    status = entry.Value.Status.ToString(),
+                    description = entry.Value.Description,
+                    durationMs = Math.Round(entry.Value.Duration.TotalMilliseconds, 1),
+                    tags = entry.Value.Tags,
+                    data = entry.Value.Data
+                })
         });
 
     private static string ServiceName(IHostApplicationBuilder builder) =>

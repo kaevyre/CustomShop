@@ -1,4 +1,7 @@
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Orders.Api.Grpc;
+using Orders.Api.HealthChecks;
+using Orders.Api.Metrics;
 using Orders.Api.Middleware;
 using Orders.Bll.Caching;
 using Orders.Bll.Mapping;
@@ -44,13 +47,30 @@ else
     builder.Services.AddDistributedMemoryCache();   // запуск без Aspire
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
-builder.AddCacheHealthCheck();
+builder.AddCacheHealthCheck();                // Лаб. 07: redis-cache — Degraded, а не Unhealthy (кеш необов'язковий)
+
+// Лаб. 07: бізнес-метрики (Meter "Orders.Api" через IMeterFactory; Singleton) і знімок для gauge orders.by_status
+builder.Services.AddSingleton<OrderMetrics>();
+builder.Services.AddHostedService<OrderStatusSnapshotService>();
+
+// Лаб. 07: health check бази замовлень — ім'я й теги для Dashboard і /health/ready, таймаут 5 с
+builder.Services.AddHealthChecks()
+    .AddCheck<OrdersDbHealthCheck>(
+        name: "orders-db",
+        failureStatus: HealthStatus.Unhealthy,
+        tags: ["database", "sql", "ready"],
+        timeout: TimeSpan.FromSeconds(5));
 
 builder.Services.AddGrpc(o =>
 {
     o.Interceptors.Add<GrpcLoggingInterceptor>();
     o.EnableDetailedErrors = builder.Environment.IsDevelopment();
 });
+
+// Лаб. 07: стандартний gRPC Health Checking Protocol. Статус сервісу "" залежить лише від перевірок бази (тег "database"):
+// недоступний Redis (Degraded) не робить сервіс NotServing для Aggregator.
+builder.Services.AddGrpcHealthChecks(o =>
+    o.Services.Map("", check => check.Tags.Contains("database")));
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -69,8 +89,9 @@ app.UseExceptionHandler();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapDefaultEndpoints();                     // /health і /alive
+app.MapDefaultEndpoints();                     // /health, /alive, /health/live, /health/ready, /health/startup
 app.MapControllers();
 app.MapGrpcService<OrdersGrpcService>();       // endpoint "grpc" (HTTP/2) із Kestrel:Endpoints
+app.MapGrpcHealthChecksService();              // grpc.health.v1.Health: Check/Watch для Aggregator
 
 app.Run();
