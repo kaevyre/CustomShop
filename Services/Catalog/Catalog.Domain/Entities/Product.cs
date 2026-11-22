@@ -65,6 +65,14 @@ public class Product : AuditableEntity
         BasePrice = newPrice;
     }
 
+    /// <summary>Перейменування товару; порожня назва заборонена (так само, як у конструкторі).</summary>
+    public void Rename(string newName)
+    {
+        if (string.IsNullOrWhiteSpace(newName))
+            throw new DomainException("Product name is required.");
+        Name = newName.Trim();
+    }
+
     public void AddStock(int quantity)
     {
         if (quantity <= 0)

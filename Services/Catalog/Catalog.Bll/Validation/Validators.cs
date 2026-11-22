@@ -21,6 +21,24 @@ public sealed class CreateProductDtoValidator : AbstractValidator<CreateProductD
     }
 }
 
+public sealed class RenameProductDtoValidator : AbstractValidator<RenameProductDto>
+{
+    public RenameProductDtoValidator()
+    {
+        RuleFor(x => x.Name).Must(n => !string.IsNullOrWhiteSpace(n))
+            .WithMessage("Product name is required.");
+        RuleFor(x => x.RowVersion).Must(BeRowVersion!)
+            .When(x => !string.IsNullOrEmpty(x.RowVersion))
+            .WithMessage("RowVersion must be the Base64 value returned by the API (8 bytes).");
+    }
+
+    private static bool BeRowVersion(string value)
+    {
+        var buffer = new byte[16];
+        return Convert.TryFromBase64String(value, buffer, out var written) && written == 8;
+    }
+}
+
 public sealed class ChangePriceDtoValidator : AbstractValidator<ChangePriceDto>
 {
     public ChangePriceDtoValidator()

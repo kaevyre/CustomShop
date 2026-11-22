@@ -1105,3 +1105,76 @@ curl http://localhost:5080/health/ready
 | gRPC Health Checking Protocol і перевірка залежностей в Aggregator | `Program.cs` сервісів, `Platform.Aggregator/HealthChecks/GrpcDependencyHealthCheck.cs` |
 | Розділені liveness і readiness endpoints з деталями | `Platform.ServiceDefaults/Extensions.cs` (`MapDefaultEndpoints`) |
 | AppHost показує стан ресурсів через `WithHttpHealthCheck` | `Platform.AppHost/AppHost.cs` |
+
+---
+
+# Лаб. 08 — асинхронна подієва архітектура: RabbitMQ, domain events, consumers, трасування, DLQ
+
+Каталог (Лаб. 03) публікує події про зміну товару, а Замовлення (Лаб. 02) і Відгуки (Лаб. 04) оновлюють свої копії даних — це механізм «оновлюється подіями з Каталогу» з таблиці політики дублювання (Лаб. 01, `docs/duplication-policy.md`).
+
+| Подія (routing key) | Хто публікує | Хто споживає і що робить |
+|---|---|---|
+| `ProductCreatedEvent` (`product.created`) | Каталог: `ProductService.CreateAsync` | Замовлення: створює рядок у `Products` |
+| `ProductPriceChangedEvent` (`product.price_changed`) | Каталог: `ChangePriceAsync` | Замовлення: оновлює `Products.Price`; **`OrderItems.UnitPrice` не змінюється** (знімок на момент покупки) |
+| `ProductRenamedEvent` (`product.renamed`) | Каталог: `RenameAsync` (новий `PUT /api/products/{id}/name`) | Замовлення: `Products.Name`; Відгуки: `productName` в усіх відгуках товару |
+| `ProductDeletedEvent` (`product.deleted`) | Каталог: `DeleteAsync` | Замовлення: копія стає неактивною (`IsActive = 0`), `Id` лишається |
+
+## Структура (нове й змінене)
+
+```text
+Platform.EventBus/                  ★ нова бібліотека
+  Events/                           IntegrationEvent (EventId, OccurredAt, CorrelationId, SchemaVersion), події Каталогу
+  Topology.cs                       exchanges, черги, bindings, DLX/DLQ (оголошується в коді при старті)
+  RabbitMqEventPublisher.cs         IEventPublisher: JSON, persistent, MessageId = EventId, publisher confirms, Producer-span
+  EventConsumerBase.cs              BackgroundService: ручний ack, Nack без requeue, повтори x-retry-count, DLQ, відновлення trace
+  TracePropagation.cs               W3C traceparent: Inject у publisher, Extract + Consumer-Activity у consumer
+  TopologyInitializer.cs            оголошення топології на старті (також у publisher-сервісі)
+  DeadLetterDepthMonitor.cs         gauge messaging.dlq.depth
+  EventBusExtensions.cs, JsonDefaults.cs, CorrelationIdProvider.cs, IEventPublisher.cs
+Platform.AppHost/AppHost.cs         ★ AddRabbitMQ("messaging").WithDataVolume().WithManagementPlugin(port: 15672) + WithReference/WaitFor
+Platform.ServiceDefaults/           ★ AddSource/AddMeter("Platform.Messaging")
+Services/Catalog/Catalog.Bll/       ★ ProductService: SaveChanges → PublishAsync; Rename
+Services/Orders/Orders.Api/IntegrationEvents/   ★ CatalogEventsConsumer, обробники подій
+Services/Orders/Orders.Dal/         ★ ProductRepository.UpsertSnapshotAsync, ProcessedEventRepository, Migrations/002_ProcessedEvents.sql
+Services/Reviews/Reviews.WebApi/IntegrationEvents/  ★ CatalogEventsConsumer, ProductRenamedHandler
+db/p1/schema.sql                    ★ таблиця dbo.ProcessedEvents
+```
+
+## Топологія
+
+```text
+catalog-events (topic, durable)
+ ├─ product.created | product.price_changed | product.renamed | product.deleted ─► orders.catalog-sync
+ └─ product.renamed ─────────────────────────────────────────────────────────► reviews.catalog-sync
+ черга ─(x-dead-letter-exchange, x-dead-letter-routing-key = ім'я черги)─► catalog-events.dlx (direct) ─► {черга}.dlq
+```
+
+DLX — `direct`, а не `fanout`: кожна DLQ прив'язана за ім'ям черги-джерела, тож «мертві» повідомлення `orders.catalog-sync` не потрапляють у `reviews.catalog-sync.dlq`.
+
+## Запуск
+
+Потрібен Docker Desktop. RabbitMQ піднімає AppHost (облікові дані генерує Aspire): `dotnet run --project Platform.AppHost`. Management UI — `http://localhost:15672` (логін і пароль — параметри ресурсу `messaging-password` у Dashboard, користувач `guest`). Для БД, створених до Лаб. 08, таблицю `dbo.ProcessedEvents` на старті створює сам consumer (скрипт ідемпотентний; той самий — `Orders.Dal/Migrations/002_ProcessedEvents.sql`).
+
+## Перевірка сценаріїв
+
+```bash
+# 1) зміна ціни: за кілька секунд оновиться Products у БД Замовлень, OrderItems.UnitPrice лишиться
+curl -X PUT http://localhost:5000/api/products/1/price -H "Content-Type: application/json" -d '{"price": 4999.00}'
+# 2) перейменування: нова назва з'явиться в Products (Замовлення) і в productName усіх відгуків
+curl -X PUT http://localhost:5000/api/products/1/name -H "Content-Type: application/json" -d '{"name": "Клавіатура Aurora 75 Pro"}'
+```
+
+3. **Дублікат події.** У Management UI: Exchanges → `catalog-events` → Publish message, routing key `product.price_changed`, Properties: `type=ProductPriceChangedEvent`, Payload (двічі з тим самим `eventId`):
+   `{"eventId":"11111111-1111-1111-1111-111111111111","occurredAt":"2030-01-01T00:00:00Z","schemaVersion":1,"productId":1,"sku":"KB-075-ALU","productName":"Клавіатура Aurora 75 (алюміній)","oldPrice":4500,"newPrice":4700,"isActive":true}`.
+   Перша обробка змінює ціну, друга лише логує `Duplicate event … skipped`.
+4. **Обробка після перезапуску.** Зупинити `orders-api` у Dashboard, змінити кілька цін, запустити знову — черга `orders.catalog-sync` (durable) тримала повідомлення, усі будуть оброблені.
+5. **DLQ.** У тому самому Publish message з `type=ProductPriceChangedEvent` і payload `{broken` — повідомлення одразу потрапляє в `orders.catalog-sync.dlq` (заголовок `x-death` містить причину). Зупинка SQL Server на час обробки дає в логах `Transient failure … retry 1/3`, `2/3`, `3/3`, а після вичерпання спроб — DLQ.
+6. **Наскрізний trace.** Dashboard → Traces: `PUT /api/products/{id}/price` → `catalog-events publish` → `orders.catalog-sync process` (і `reviews.catalog-sync process` для перейменування) → запити до БД. Логи фільтруються за `CorrelationId`.
+
+## Рішення, які варто знати
+
+- **Публікація після збереження.** `SaveChangesAsync` → `PublishAsync`; якщо збереження не вдалося, подія не публікується. Збій публікації (брокер недоступний) логується й не відкочує вже збережену зміну. Подію, втрачену між збереженням і публікацією, гарантовано доставляє лише Transactional Outbox — у цій роботі він не реалізований (за бажанням).
+- **Ідемпотентність.** Orders: `EventId` у `ProcessedEvents` і зміна `Products` — в одній SQL-транзакції (дублікат = порушення PK, помилка 2627). Reviews: MongoDB без транзакцій, тому `$set` (ідемпотентний за природою) + колекція `processedEvents`.
+- **Порядок подій.** Кожна подія несе знімок товару; копія оновлюється, лише якщо `Products.SyncedAt <= OccurredAt` (у Reviews — колекція `productSync`), тож подія, що прийшла пізніше за новішу, нічого не перезапише.
+- **Повтори** — у ту саму чергу (default exchange), а не в `catalog-events`: інакше копія розійшлася б усім споживачам. Тимчасовий збій → повтор із `x-retry-count` (до 3, затримка 1/2/4 с), постійний (некоректний JSON, невідомий тип події) → одразу DLQ.
+- **Не реалізовано:** `StockChanged` (залишки), події Замовлень (`OrderStatusChangedEvent`), Transactional Outbox.

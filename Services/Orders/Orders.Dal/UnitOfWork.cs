@@ -19,7 +19,8 @@ public sealed class UnitOfWork : IUnitOfWork
         IProductRepository products,
         IOrderRepository orders,
         IOrderItemRepository orderItems,
-        IOrderSummaryRepository orderSummaries)
+        IOrderSummaryRepository orderSummaries,
+        IProcessedEventRepository processedEvents)
     {
         _session = session;
         Customers = customers;
@@ -27,6 +28,7 @@ public sealed class UnitOfWork : IUnitOfWork
         Orders = orders;
         OrderItems = orderItems;
         OrderSummaries = orderSummaries;
+        ProcessedEvents = processedEvents;
     }
 
     public ICustomerRepository Customers { get; }
@@ -34,6 +36,7 @@ public sealed class UnitOfWork : IUnitOfWork
     public IOrderRepository Orders { get; }
     public IOrderItemRepository OrderItems { get; }
     public IOrderSummaryRepository OrderSummaries { get; }
+    public IProcessedEventRepository ProcessedEvents { get; }
 
     public bool HasActiveTransaction => _session.Transaction is not null;
 

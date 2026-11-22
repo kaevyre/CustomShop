@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Platform.EventBus;
 using Reviews.Application;
 using Reviews.Infrastructure;
 using Reviews.Infrastructure.Persistence;
 using Reviews.WebApi;
 using Reviews.WebApi.Grpc;
+using Reviews.WebApi.IntegrationEvents;
 using Reviews.WebApi.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +28,14 @@ builder.AddCacheHealthCheck();                   // Лаб. 07: redis-cache — 
 
 // Лаб. 07: бізнес-метрики (Meter "Reviews.Api" через IMeterFactory; Singleton)
 builder.Services.AddSingleton<ReviewMetrics>();
+
+// Лаб. 08: RabbitMQ — IConnection (singleton) + health check + телеметрія Aspire; рядок підключення "messaging" передає AppHost.
+// Відгуки — споживач подій Каталогу: перейменування товару оновлює productName у всіх відгуках про нього.
+builder.AddRabbitMQClient("messaging");
+builder.Services.AddEventBus();                                   // publisher, CorrelationId, топологія
+builder.Services.AddCatalogSyncHandlers();                        // обробники подій (Scoped)
+builder.Services.AddHostedService<CatalogEventsConsumer>();       // споживач черги reviews.catalog-sync
+builder.Services.AddDeadLetterDepthMonitor(Topology.ReviewsCatalogSyncQueue);  // gauge messaging.dlq.depth
 
 builder.Services.AddGrpc(o =>
 {

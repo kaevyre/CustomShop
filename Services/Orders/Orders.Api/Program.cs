@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Orders.Api.Grpc;
+using Orders.Api.IntegrationEvents;
 using Orders.Api.HealthChecks;
 using Orders.Api.Metrics;
 using Orders.Api.Middleware;
@@ -10,6 +11,7 @@ using Orders.Dal;
 using Orders.Dal.Abstractions;
 using Orders.Dal.Infrastructure;
 using Orders.Dal.Repositories;
+using Platform.EventBus;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();                 // Лаб. 05: Serilog, OpenTelemetry, health checks, service discovery
@@ -25,6 +27,7 @@ builder.Services.AddScoped<IProductRepository, ProductRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IOrderItemRepository, OrderItemRepository>();
 builder.Services.AddScoped<IOrderSummaryRepository, OrderSummaryRepository>();
+builder.Services.AddScoped<IProcessedEventRepository, ProcessedEventRepository>();   // Лаб. 08: ідемпотентність consumer-а
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 // BLL: AutoMapper-профілі та сервіси
@@ -60,6 +63,14 @@ builder.Services.AddHealthChecks()
         failureStatus: HealthStatus.Unhealthy,
         tags: ["database", "sql", "ready"],
         timeout: TimeSpan.FromSeconds(5));
+
+// Лаб. 08: RabbitMQ — IConnection (singleton) + health check + телеметрія Aspire; рядок підключення "messaging" передає AppHost.
+// Orders — споживач подій Каталогу: оновлює локальну копію довідника Products (політика узгодженості з Лаб. 01).
+builder.AddRabbitMQClient("messaging");
+builder.Services.AddEventBus();                                   // publisher, CorrelationId, топологія
+builder.Services.AddCatalogSyncHandlers();                        // обробники подій (Scoped)
+builder.Services.AddHostedService<CatalogEventsConsumer>();       // споживач черги orders.catalog-sync
+builder.Services.AddDeadLetterDepthMonitor(Topology.OrdersCatalogSyncQueue);   // gauge messaging.dlq.depth
 
 builder.Services.AddGrpc(o =>
 {

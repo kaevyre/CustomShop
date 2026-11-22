@@ -19,6 +19,11 @@ var builder = WebApplication.CreateBuilder(args);
 // Лаб. 05: Serilog (рівні — як і раніше, із секції "Serilog" appsettings.json), OpenTelemetry, health checks
 builder.AddServiceDefaults();
 
+// Лаб. 08: RabbitMQ — IConnection (singleton), health check і телеметрія Aspire; рядок підключення "messaging" передає AppHost.
+// Каталог — publisher: після збереження змін товару публікує ProductPriceChanged / ProductRenamed / ... у exchange catalog-events.
+builder.AddRabbitMQClient("messaging");
+builder.Services.AddEventBus();
+
 // Рядок підключення: appsettings.json або змінна середовища ConnectionStrings__CatalogDb (її передає Aspire)
 var connectionString = builder.Configuration.GetConnectionString("CatalogDb")
     ?? throw new InvalidOperationException("Connection string 'CatalogDb' is not configured.");

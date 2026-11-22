@@ -205,4 +205,13 @@ GROUP BY o.Id, o.CustomerId, c.FullName, c.Email, o.Status, o.OrderDate,
          o.PaidAt, o.ShippedAt, d.City, d.DeliveryMethod;
 GO
 
+-- Лаб. 08: оброблені інтеграційні події (ідемпотентність consumer-а Orders.Api).
+-- Запис EventId робиться в одній транзакції зі зміною Products; повторна доставка тієї самої події
+-- порушує PRIMARY KEY (помилка 2627) — це означає «уже оброблено». Для вже розгорнутих БД — Services/Orders/Orders.Dal/Migrations.
+CREATE TABLE dbo.ProcessedEvents (
+    EventId     UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ProcessedEvents PRIMARY KEY,
+    ProcessedAt DATETIME2        NOT NULL CONSTRAINT DF_ProcessedEvents_ProcessedAt DEFAULT SYSUTCDATETIME()
+);
+GO
+
 PRINT N'Схему CustomShop_Orders створено.';

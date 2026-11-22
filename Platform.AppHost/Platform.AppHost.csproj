@@ -15,6 +15,7 @@
     <PackageReference Include="Aspire.Hosting.MongoDB" Version="9.5.2" />
     <PackageReference Include="Aspire.Hosting.SqlServer" Version="9.5.2" />
     <PackageReference Include="Aspire.Hosting.Redis" Version="9.5.2" />
+    <PackageReference Include="Aspire.Hosting.RabbitMQ" Version="9.5.2" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.*" />
   </ItemGroup>
 
