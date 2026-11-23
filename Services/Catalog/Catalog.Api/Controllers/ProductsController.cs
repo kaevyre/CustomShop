@@ -61,6 +61,19 @@ public sealed class ProductsController : ControllerBase
         return Ok(product);
     }
 
+    /// <summary>Перейменування товару: після збереження публікується ProductRenamedEvent (Відгуки оновлюють productName).</summary>
+    [HttpPut("{id:long}/name")]
+    public async Task<ActionResult<ProductDto>> Rename(
+        long id, RenameProductDto dto, [FromServices] IValidator<RenameProductDto> validator, CancellationToken ct)
+    {
+        if (await this.ValidateAsync(validator, dto, ct) is { } invalid)
+            return invalid;
+
+        var product = await _metrics.MeasureAsync("rename", () => _products.RenameAsync(id, dto, ct));
+        _metrics.ProductUpdated("name");
+        return Ok(product);
+    }
+
     [HttpPost("{id:long}/stock/add")]
     public async Task<ActionResult<ProductDto>> AddStock(long id, StockChangeDto dto, CancellationToken ct)
     {

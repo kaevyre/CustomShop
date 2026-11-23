@@ -1,3 +1,4 @@
+using System.Data;
 using Dapper;
 using Orders.Dal.Abstractions;
 using Orders.Dal.Infrastructure;
@@ -15,6 +16,32 @@ public sealed class ProductRepository : BaseDapperRepository<Product>, IProductR
     protected override IReadOnlyList<string> Columns => ["Sku", "Name", "Price", "Stock", "IsActive", "SyncedAt"];
     protected override IReadOnlyList<string> ReadOnlyColumns => ["RowVersion"];
     protected override bool IdIsGenerated => false;
+
+    public async Task<bool> UpsertSnapshotAsync(ProductSnapshot snapshot, CancellationToken ct = default)
+    {
+        const string sql = """
+            MERGE dbo.Products WITH (HOLDLOCK) AS t
+            USING (SELECT @Id AS Id) AS s ON t.Id = s.Id
+            WHEN MATCHED AND t.SyncedAt <= @OccurredAt THEN
+                UPDATE SET Sku = @Sku, Name = @Name, Price = @Price, IsActive = @IsActive, SyncedAt = @OccurredAt
+            WHEN NOT MATCHED THEN
+                INSERT (Id, Sku, Name, Price, Stock, IsActive, SyncedAt)
+                VALUES (@Id, @Sku, @Name, @Price, ISNULL(@Stock, 0), @IsActive, @OccurredAt);
+            """;
+
+        var parameters = new DynamicParameters();
+        parameters.Add("Id", snapshot.Id, DbType.Int64);
+        parameters.Add("Sku", snapshot.Sku, DbType.String, size: 50);
+        parameters.Add("Name", snapshot.Name, DbType.String, size: 200);
+        parameters.Add("Price", snapshot.Price, DbType.Decimal);
+        parameters.Add("Stock", snapshot.Stock, DbType.Int32);
+        parameters.Add("IsActive", snapshot.IsActive, DbType.Boolean);
+        parameters.Add("OccurredAt", snapshot.OccurredAt, DbType.DateTime2);   // не DateTime: datetime округлює до 1/300 с
+
+        var connection = await Session.GetConnectionAsync(ct);
+        var affected = await GuardAsync(() => connection.ExecuteAsync(Command(sql, parameters, ct)));
+        return affected > 0;
+    }
 
     public async Task<Product?> GetBySkuAsync(string sku, CancellationToken ct = default)
     {

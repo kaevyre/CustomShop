@@ -15,6 +15,8 @@
     <!-- Лаб. 07: стандартний gRPC Health Checking Protocol -->
     <PackageReference Include="Grpc.AspNetCore.HealthChecks" Version="2.76.0" />
     <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.2" />
+    <!-- Лаб. 08: Aspire-інтеграція RabbitMQ (IConnection, health check, телеметрія) -->
+    <PackageReference Include="Aspire.RabbitMQ.Client.v7" Version="9.5.2" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +27,8 @@
     <ProjectReference Include="..\Reviews.Application\Reviews.Application.csproj" />
     <!-- Infrastructure — лише для реєстрації залежностей на старті (AddInfrastructure) -->
     <ProjectReference Include="..\Reviews.Infrastructure\Reviews.Infrastructure.csproj" />
+    <!-- Лаб. 08: подієва шина (consumer, топологія, контракти подій) -->
+    <ProjectReference Include="..\..\..\Platform.EventBus\Platform.EventBus.csproj" />
   </ItemGroup>
 
   <ItemGroup>

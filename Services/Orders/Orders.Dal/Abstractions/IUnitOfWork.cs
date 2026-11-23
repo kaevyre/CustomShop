@@ -14,6 +14,9 @@ public interface IUnitOfWork : IAsyncDisposable
     IOrderItemRepository OrderItems { get; }
     IOrderSummaryRepository OrderSummaries { get; }
 
+    /// <summary>Лаб. 08: оброблені події (ідемпотентність споживача) — у тій самій транзакції, що й бізнес-зміни.</summary>
+    IProcessedEventRepository ProcessedEvents { get; }
+
     bool HasActiveTransaction { get; }
 
     Task BeginAsync(IsolationLevel isolationLevel = IsolationLevel.ReadCommitted, CancellationToken ct = default);

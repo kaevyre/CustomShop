@@ -27,12 +27,20 @@ builder.Eventing.Subscribe<ResourceReadyEvent>(ordersDb.Resource, async (@event,
 var redis = builder.AddRedis("redis")
     .WithDataVolume("customshop-redis");
 
+// RabbitMQ (Лаб. 08): брокер повідомлень у Docker-контейнері; облікові дані генерує Aspire і передає сервісам рядком підключення.
+// WithDataVolume — черги й persistent-повідомлення переживають перезапуск; WithManagementPlugin — веб-інтерфейс керування (порт 15672).
+var rabbit = builder.AddRabbitMQ("messaging")
+    .WithDataVolume("customshop-rabbitmq")
+    .WithManagementPlugin(port: 15672);
+
 // Endpoint-и сервісів ("http" для REST і "grpc" лише з HTTP/2) Aspire бере із секції Kestrel:Endpoints їхніх appsettings.json.
 var orders = builder.AddProject<Projects.Orders_Api>("orders-api")
     .WithReference(ordersDb)
     .WaitFor(ordersDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithReference(rabbit)                                   // Лаб. 08: споживає події Каталогу (копія довідника Products)
+    .WaitFor(rabbit)
     .WithHttpHealthCheck("/health", endpointName: "http");
 
 // Каталог (Лаб. 03): схему створюють міграції EF Core, сідінг — сам Catalog.Api на старті.
@@ -43,6 +51,8 @@ var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WaitFor(catalogDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithReference(rabbit)                                   // Лаб. 08: публікує події про зміну товару
+    .WaitFor(rabbit)
     .WithHttpHealthCheck("/health", endpointName: "http");
 
 // Відгуки (Лаб. 04): MongoDB у контейнері з постійним volume; індекси й seed створює сам reviews-api на старті.
@@ -55,6 +65,8 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WaitFor(reviewsDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithReference(rabbit)                                   // Лаб. 08: споживає події Каталогу (productName у відгуках)
+    .WaitFor(rabbit)
     .WithHttpHealthCheck("/health", endpointName: "http");
 
 // Aggregator (Лаб. 05–06): паралельно опитує сервіси через gRPC; стартує після них і Redis.

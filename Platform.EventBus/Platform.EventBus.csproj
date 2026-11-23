@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Лаб. 08: подієва шина на RabbitMQ — підключення (Aspire), топологія, publisher, базовий consumer,
+       передача контексту трасування, повтори й dead-letter. Сервіси посилаються на цей проєкт; сам він
+       не залежить від жодного сервісу, тому контракти подій спільні для publisher і consumer. -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- RabbitMQ.Client 7.x: повністю асинхронний API (IChannel, *Async) -->
+    <PackageReference Include="RabbitMQ.Client" Version="7.1.2" />
+    <!-- Aspire-інтеграція: реєструє IConnection, health check і телеметрію -->
+    <PackageReference Include="Aspire.RabbitMQ.Client.v7" Version="9.5.2" />
+    <!-- пропагатор контексту трасування (W3C traceparent) -->
+    <PackageReference Include="OpenTelemetry.Api" Version="1.15.3" />
+  </ItemGroup>
+
+</Project>

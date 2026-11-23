@@ -39,6 +39,12 @@ public static class Extensions
     /// </summary>
     public static readonly string[] BusinessMeters = ["Orders.Api", "Catalog.Api", "Reviews.Api"];
 
+    /// <summary>
+    /// ActivitySource і Meter подієвої шини (Лаб. 08): spans публікації й обробки повідомлень RabbitMQ та gauge messaging.dlq.depth.
+    /// Назва збігається з Platform.EventBus (TracePropagation.SourceName, DeadLetterDepthMonitor.MeterName).
+    /// </summary>
+    public const string MessagingSource = "Platform.Messaging";
+
     /// <summary>Meter бібліотеки Polly: resilience.polly.strategy.events, resilience.polly.strategy.attempt.duration, resilience.polly.pipeline.duration.</summary>
     public const string PollyMeter = "Polly";
 
@@ -126,6 +132,7 @@ public static class Extensions
                 .AddMeter(appName)                                  // власні метрики (напр. Gateway)
                 .AddMeter(CacheMeters)                              // cache.hits / cache.misses (Лаб. 06)
                 .AddMeter(BusinessMeters)                           // orders.created, products.updated, ... (Лаб. 07)
+                .AddMeter(MessagingSource)                          // messaging.dlq.depth (Лаб. 08)
                 .AddMeter(PollyMeter)                               // метрики resilience: повтори, circuit breaker, таймаути (Лаб. 07)
                 .AddView(instrument => instrument.Name.EndsWith(".operation.duration", StringComparison.Ordinal)
                     && instrument.Unit == "ms"
@@ -136,6 +143,7 @@ public static class Extensions
                 .AddSource(appName)                                 // власні spans бізнес-операцій
                 .AddSource($"{appPrefix}.*")                        // Orders.Bll, Catalog.Bll, Reviews.Application
                 .AddSource(MongoActivitySource)                     // MongoDB (Лаб. 04)
+                .AddSource("Platform.Messaging")                    // публікація й обробка повідомлень RabbitMQ (Лаб. 08)
                 .AddAspNetCoreInstrumentation(o =>
                     // health checks не засмічують трасування
                     o.Filter = ctx => !ctx.Request.Path.StartsWithSegments(HealthEndpointPath)

@@ -93,6 +93,15 @@ public sealed class ChangePriceDto
     public string? RowVersion { get; set; }
 }
 
+public sealed class RenameProductDto
+{
+    [Required, StringLength(200)]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Base64-значення з останньої відповіді API; якщо задане — перевіряється конфлікт версій.</summary>
+    public string? RowVersion { get; set; }
+}
+
 public sealed class StockChangeDto
 {
     [Range(1, 100_000)]
