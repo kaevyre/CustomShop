@@ -1,0 +1,9 @@
+body { font-family: system-ui, sans-serif; background: #f3f5f8; margin: 0; }
+.card { max-width: 380px; margin: 10vh auto; background: #fff; padding: 2rem; border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,.08); }
+h1 { font-size: 1.3rem; margin-top: 0; }
+label { display: block; margin: .8rem 0 .2rem; font-size: .9rem; }
+input[type=text], input[type=password] { width: 100%; padding: .55rem; box-sizing: border-box; }
+button { margin-top: 1.2rem; padding: .6rem 1rem; width: 100%; cursor: pointer; }
+.error { color: #b00020; font-size: .9rem; }
+.hint { color: #666; font-size: .8rem; margin-top: 1rem; }

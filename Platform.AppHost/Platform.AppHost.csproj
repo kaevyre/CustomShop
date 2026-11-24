@@ -16,6 +16,8 @@
     <PackageReference Include="Aspire.Hosting.SqlServer" Version="9.5.2" />
     <PackageReference Include="Aspire.Hosting.Redis" Version="9.5.2" />
     <PackageReference Include="Aspire.Hosting.RabbitMQ" Version="9.5.2" />
+    <!-- Лаб. 09: Keycloak-інтеграція Aspire (траєкторія Б; preview-пакет) -->
+    <PackageReference Include="Aspire.Hosting.Keycloak" Version="9.5.*-*" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.*" />
   </ItemGroup>
 
@@ -25,6 +27,9 @@
     <ProjectReference Include="..\Services\Reviews\Reviews.WebApi\Reviews.WebApi.csproj" />
     <ProjectReference Include="..\Platform.ApiGateway\Platform.ApiGateway.csproj" />
     <ProjectReference Include="..\Platform.Aggregator\Platform.Aggregator.csproj" />
+    <ProjectReference Include="..\Platform.IdentityServer\Platform.IdentityServer.csproj" />
+    <ProjectReference Include="..\Services\Auth\Auth.Api\Auth.Api.csproj" />
+    <ProjectReference Include="..\Services\Payments\Payments.Api\Payments.Api.csproj" />
   </ItemGroup>
 
 </Project>

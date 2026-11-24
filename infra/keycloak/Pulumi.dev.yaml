@@ -1,0 +1,8 @@
+# Dev-стек. Адмін-пароль — ЛИШЕ для локальної розробки; у реальному проєкті:
+#   pulumi config set --secret keycloak-infra:adminPassword <password>
+config:
+  keycloak-infra:keycloakUrl: http://localhost:8080
+  keycloak-infra:adminUser: admin
+  keycloak-infra:adminPassword: admin123
+  keycloak-infra:testUserPassword: ChangeMe123!
+encryptionsalt: v1:XTWpGHdeq74=:v1:MEW9is12BPQRojML:Gg77ALJPfCBVZgEwKCb2Z9iKcZI8qg==

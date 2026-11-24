@@ -1,3 +1,4 @@
+using Platform.ServiceDefaults.Security;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
 using FluentValidation;
@@ -16,21 +17,25 @@ public sealed class CategoriesController : ControllerBase
         _categories = categories;
     }
 
+    [RequirePermission("products:read")]
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<CategoryDto>>> GetAll(CancellationToken ct) =>
         Ok(await _categories.GetAllAsync(ct));
 
     /// <summary>Категорія з товарами (Explicit Loading: два SQL-запити).</summary>
+    [RequirePermission("products:read")]
     [HttpGet("{id:int}")]
     public async Task<ActionResult<CategoryWithProductsDto>> GetById(int id, CancellationToken ct) =>
         Ok(await _categories.GetWithProductsAsync(id, ct));
 
     /// <summary>Нещодавно додані товари категорії (LINQ через проміжну сутність M:N), рекомендовані першими.</summary>
+    [RequirePermission("products:read")]
     [HttpGet("{id:int}/recent-products")]
     public async Task<ActionResult<IReadOnlyList<CategoryProductDto>>> GetRecentProducts(
         int id, [FromQuery] DateTime? since, [FromQuery] bool featuredOnly = false, CancellationToken ct = default) =>
         Ok(await _categories.GetRecentProductsAsync(id, since, featuredOnly, ct));
 
+    [RequirePermission("products:create")]
     [HttpPost]
     public async Task<ActionResult<CategoryDto>> Create(
         CreateCategoryDto dto, [FromServices] IValidator<CreateCategoryDto> validator, CancellationToken ct)
@@ -42,6 +47,7 @@ public sealed class CategoriesController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
+    [RequirePermission("products:delete")]
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {

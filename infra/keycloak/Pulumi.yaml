@@ -1,0 +1,4 @@
+name: keycloak-infra
+description: Keycloak realm DevRealmDrivers (clients, resource servers, roles, users) — Lab 09, Infrastructure as Code
+runtime:
+  name: dotnet

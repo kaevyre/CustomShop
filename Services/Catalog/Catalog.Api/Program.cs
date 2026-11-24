@@ -14,6 +14,7 @@ using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Platform.ServiceDefaults.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 // Лаб. 05: Serilog (рівні — як і раніше, із секції "Serilog" appsettings.json), OpenTelemetry, health checks
@@ -80,6 +81,14 @@ builder.Services.AddGrpc(o =>
 builder.Services.AddGrpcHealthChecks(o =>
     o.Services.Map("", check => check.Tags.Contains("database")));
 
+// Лаб. 09: JWT валідується САМОСТІЙНО (Auth Service / IdentityServer / Keycloak — за issuer токена), без запитів до провайдера.
+// Keycloak-audience = "products-api", IdentityServer-audience = "products_api".
+builder.AddPlatformAuthentication(new ServiceAudiences(Keycloak: "products-api", IdentityServer: "products_api"));
+
+// Політика на КОЖЕН permission з таблиці 3.3.2; рішення приймається ЛОКАЛЬНО за claim authorization.permissions
+builder.Services.AddPermissionAuthorization(
+    "products:read", "products:create", "products:update", "products:delete", "products:publish");
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -106,6 +115,10 @@ app.UseExceptionHandler();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+app.UseGatewayOnly();                  // Лаб. 09: прямий доступ повз Gateway блокується (якщо задано Gateway:Secret)
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapDefaultEndpoints();                     // /health, /alive, /health/live, /health/ready, /health/startup
 app.MapControllers();

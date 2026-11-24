@@ -1178,3 +1178,45 @@ curl -X PUT http://localhost:5000/api/products/1/name -H "Content-Type: applicat
 - **Порядок подій.** Кожна подія несе знімок товару; копія оновлюється, лише якщо `Products.SyncedAt <= OccurredAt` (у Reviews — колекція `productSync`), тож подія, що прийшла пізніше за новішу, нічого не перезапише.
 - **Повтори** — у ту саму чергу (default exchange), а не в `catalog-events`: інакше копія розійшлася б усім споживачам. Тимчасовий збій → повтор із `x-retry-count` (до 3, затримка 1/2/4 с), постійний (некоректний JSON, невідомий тип події) → одразу DLQ.
 - **Не реалізовано:** `StockChanged` (залишки), події Замовлень (`OrderStatusChangedEvent`), Transactional Outbox.
+
+
+## Лабораторна робота 09 — Аутентифікація та авторизація
+
+Три провайдери, один набір мікросервісів: сервіси валідують JWT **самостійно** (схема обирається за claim `iss`), а доступ перевіряється локально через `[RequirePermission("<resource>:<action>")]`.
+
+| Частина | Де | Опис |
+|---|---|---|
+| 1. ASP.NET Identity + JWT | `Services/Auth/Auth.Api` | БД `IdentityDb`, access 15 хв, refresh 7 днів (rotation, HttpOnly cookie), ролі User/Admin. Gateway: `/auth/**`, `/users/**` |
+| 2. Duende IdentityServer | `Platform.IdentityServer` | БД `IdentityServerDb`, клієнти `postman`, `aggregator_service`, `swagger`; порт 5300 |
+| 3. Keycloak + Pulumi | `infra/keycloak`, `Platform.AppHost` | realm `DevRealmDrivers`, ролі admin/manager/user/guest, resource servers orders/products/payments |
+
+Запуск (PowerShell):
+
+```powershell
+dotnet run --project Platform.AppHost
+cd infra\keycloak
+pulumi up --stack dev
+```
+
+Таблиці Identity створюються при старті. Для міграцій: `dotnet ef migrations add Init --project Services/Auth/Auth.Api` (аналогічно для IdentityServer: три контексти).
+
+Матриця перевірки, Postman-колекція і декодовані JWT — у `docs/lab09/` (колонки «факт» і реальні токени заповнюються після запуску).
+
+### Лаб. 09 — EF migrations (Identity / IdentityServer)
+
+`dotnet ef` потребує лише рядок підключення (з'єднання з БД для `migrations add` не відкривається). Міграції застосовуються самі при старті сервісу.
+
+```powershell
+dotnet tool install --global dotnet-ef   # якщо ще не встановлено
+$env:ConnectionStrings__IdentityDb = "Server=localhost,1433;Database=IdentityDb;User Id=sa;Password=x;TrustServerCertificate=True"
+dotnet ef migrations add InitialIdentity --project Services/Auth/Auth.Api
+
+$env:ConnectionStrings__IdentityServerDb = "Server=localhost,1433;Database=IdentityServerDb;User Id=sa;Password=x;TrustServerCertificate=True"
+dotnet ef migrations add InitialPersistedGrant -c PersistedGrantDbContext --project Platform.IdentityServer -o Migrations/PersistedGrantDb
+dotnet ef migrations add InitialConfiguration  -c ConfigurationDbContext  --project Platform.IdentityServer -o Migrations/ConfigurationDb
+dotnet ef migrations add InitialApplication    -c ApplicationDbContext    --project Platform.IdentityServer -o Migrations/ApplicationDb
+```
+
+### Лаб. 09 — прямий доступ повз Gateway
+
+За замовчуванням вимкнено (Swagger UI сервісів викликає їх напряму). Щоб заблокувати: у `Platform.AppHost/AppHost.cs` змінити `EnforceGatewayOnly` на `true` — сервіси приймають лише запити із заголовком `X-Gateway-Secret`, який додають Gateway та Aggregator; решта отримує 403.

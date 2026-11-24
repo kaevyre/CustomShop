@@ -1,0 +1,9 @@
+@page
+@model Platform.IdentityServer.Pages.Account.LogoutModel
+
+<h2>Вихід</h2>
+<form method="post">
+    <input type="hidden" name="logoutId" value="@Model.LogoutId" />
+    <p>Завершити сесію?</p>
+    <button type="submit">Вийти</button>
+</form>

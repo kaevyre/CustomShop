@@ -17,6 +17,10 @@
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="9.9.0" />
     <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="9.5.2" />
 
+    <!-- Лаб. 09: валідація JWT (Auth Service / IdentityServer) і Keycloak-інтеграція Aspire (AddKeycloakJwtBearer; preview-пакет) -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.*" />
+    <PackageReference Include="Aspire.Keycloak.Authentication" Version="9.5.*-*" />
+
     <!-- базовий клас Interceptor для GrpcLoggingInterceptor (Лаб. 06) -->
     <PackageReference Include="Grpc.Core.Api" Version="2.76.0" />
 

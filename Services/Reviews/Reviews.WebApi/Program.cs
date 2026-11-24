@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Platform.EventBus;
+using Platform.ServiceDefaults.Security;
 using Reviews.Application;
 using Reviews.Infrastructure;
 using Reviews.Infrastructure.Persistence;
@@ -61,6 +62,10 @@ builder.Services.AddHealthChecks()
 builder.Services.AddGrpcHealthChecks(o =>
     o.Services.Map("", check => check.Tags.Contains("database")));
 
+// Лаб. 09: валідація JWT (Auth Service / IdentityServer / Keycloak); audience не перевіряється — сервіс поза матрицею permissions
+builder.AddPlatformAuthentication();
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();  // X-Correlation-Id → LogContext і заголовок відповіді
@@ -68,6 +73,10 @@ app.UseExceptionHandler();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+app.UseGatewayOnly();                  // Лаб. 09: прямий доступ повз Gateway блокується (якщо задано Gateway:Secret)
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapDefaultEndpoints();                     // /health, /alive, /health/live, /health/ready (включно з перевіркою MongoDB), /health/startup
 app.MapControllers();

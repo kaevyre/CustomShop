@@ -1,5 +1,11 @@
 <Solution>
   <Folder Name="/Services/" />
+  <Folder Name="/Services/Auth/">
+    <Project Path="Services/Auth/Auth.Api/Auth.Api.csproj" />
+  </Folder>
+  <Folder Name="/Services/Payments/">
+    <Project Path="Services/Payments/Payments.Api/Payments.Api.csproj" />
+  </Folder>
   <Folder Name="/Services/Catalog/">
     <Project Path="Services/Catalog/Catalog.Api/Catalog.Api.csproj" />
     <Project Path="Services/Catalog/Catalog.Bll/Catalog.Bll.csproj" />
@@ -24,4 +30,6 @@
   <Project Path="Platform.ApiGateway/Platform.ApiGateway.csproj" />
   <Project Path="Platform.Aggregator/Platform.Aggregator.csproj" />
   <Project Path="Platform.EventBus/Platform.EventBus.csproj" />
+  <Project Path="Platform.IdentityServer/Platform.IdentityServer.csproj" />
+  <Project Path="infra/keycloak/Keycloak.Iac.csproj" />
 </Solution>

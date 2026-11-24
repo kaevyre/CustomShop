@@ -1,3 +1,4 @@
+using Platform.ServiceDefaults.Security;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -15,10 +16,12 @@ public sealed class BrandsController : ControllerBase
         _brands = brands;
     }
 
+    [RequirePermission("products:read")]
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<BrandDto>>> GetAll(CancellationToken ct) =>
         Ok(await _brands.GetAllAsync(ct));
 
+    [RequirePermission("products:read")]
     [HttpGet("{id:int}/products")]
     public async Task<ActionResult<PagedResult<ProductDto>>> GetProducts(
         int id, [FromQuery] PageRequest paging, CancellationToken ct) =>
