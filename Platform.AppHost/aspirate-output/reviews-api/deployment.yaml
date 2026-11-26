@@ -1,0 +1,35 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviews-api
+  labels:
+    app: reviews-api
+spec:
+  minReadySeconds: 60
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reviews-api
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: reviews-api
+    spec:
+      containers:
+      - name: reviews-api
+        image: reviews-api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: grpc
+          containerPort: 5182
+        - name: http
+          containerPort: 5082
+        envFrom:
+        - configMapRef:
+            name: reviews-api-env
+        - secretRef:
+            name: reviews-api-secrets
+      terminationGracePeriodSeconds: 180

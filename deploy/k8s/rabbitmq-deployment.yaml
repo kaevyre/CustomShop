@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  labels: { app: rabbitmq }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: rabbitmq }
+  template:
+    metadata:
+      labels: { app: rabbitmq }
+    spec:
+      containers:
+      - name: rabbitmq
+        image: rabbitmq:3.13-management
+        ports:
+        - { name: amqp, containerPort: 5672 }
+        - { name: management, containerPort: 15672 }
+        env:
+        - name: RABBITMQ_DEFAULT_USER
+          valueFrom:
+            secretKeyRef: { name: rabbitmq-secrets, key: RABBITMQ_DEFAULT_USER }
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef: { name: rabbitmq-secrets, key: RABBITMQ_DEFAULT_PASS }
+        readinessProbe:
+          tcpSocket: { port: 5672 }
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }

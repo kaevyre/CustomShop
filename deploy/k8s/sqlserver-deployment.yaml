@@ -1,0 +1,39 @@
+# SQL Server для catalog-api (демо: дані в emptyDir, зникають разом з подом)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sql
+  labels: { app: sql }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: sql }
+  template:
+    metadata:
+      labels: { app: sql }
+    spec:
+      containers:
+      - name: sql
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        ports:
+        - containerPort: 1433
+        envFrom:
+        - configMapRef:
+            name: sqlserver-config
+        env:
+        - name: MSSQL_SA_PASSWORD
+          valueFrom:
+            secretKeyRef: { name: sql-secrets, key: MSSQL_SA_PASSWORD }
+        resources:
+          requests: { cpu: 200m, memory: 1Gi }
+          limits:   { memory: 2Gi }
+        readinessProbe:
+          tcpSocket: { port: 1433 }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - { name: data, mountPath: /var/opt/mssql }
+      volumes:
+      - name: data
+        emptyDir: {}

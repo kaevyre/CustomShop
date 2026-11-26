@@ -1,0 +1,18 @@
+resources:
+- statefulset.yaml
+- service.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+- name: identity-sql-env
+  literals:
+    - ACCEPT_EULA=Y
+    - OTEL_EXPORTER_OTLP_ENDPOINT=http://aspire-dashboard:18889
+    - OTEL_SERVICE_NAME=identity-sql
+
+secretGenerator:
+- name: identity-sql-secrets
+  envs:
+  - .identity-sql.secrets

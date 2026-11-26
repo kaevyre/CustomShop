@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+  labels: { app: catalog-api }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: catalog-api }
+  template:
+    metadata:
+      labels: { app: catalog-api }
+    spec:
+      containers:
+      - name: catalog-api
+        image: catalog-api:v1
+        imagePullPolicy: IfNotPresent          # локальний образ Docker Desktop
+        ports:
+        - { name: http, containerPort: 8080 }  # REST (Kestrel:Endpoints:http із Dockerfile)
+        - { name: grpc, containerPort: 8081 }  # gRPC для Aggregator
+        envFrom:
+        - configMapRef:
+            name: catalog-config               # відкриті налаштування
+        - secretRef:
+            name: catalog-secrets              # ConnectionStrings__*, Jwt__SecretKey
+        resources:
+          requests: { cpu: 100m, memory: 192Mi }
+          limits:   { memory: 512Mi }
+        # міграції EF Core виконуються до старту Kestrel, тож дамо до ~2 хв на запуск і лише потім вмикаємо liveness
+        startupProbe:
+          httpGet: { path: /health/startup, port: 8080 }
+          periodSeconds: 5
+          failureThreshold: 24
+        livenessProbe:                         # збій -> перезапуск контейнера
+          httpGet: { path: /health/live, port: 8080 }
+          periodSeconds: 10
+        readinessProbe:                        # збій -> под виключається з Service (без перезапуску)
+          httpGet: { path: /health/ready, port: 8080 }
+          periodSeconds: 10

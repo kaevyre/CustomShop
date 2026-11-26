@@ -1220,3 +1220,42 @@ dotnet ef migrations add InitialApplication    -c ApplicationDbContext    --proj
 ### Лаб. 09 — прямий доступ повз Gateway
 
 За замовчуванням вимкнено (Swagger UI сервісів викликає їх напряму). Щоб заблокувати: у `Platform.AppHost/AppHost.cs` змінити `EnforceGatewayOnly` на `true` — сервіси приймають лише запити із заголовком `X-Gateway-Secret`, який додають Gateway та Aggregator; решта отримує 403.
+
+---
+
+# Лаб. 10 — розгортання в Kubernetes: Aspir8 (aspirate) і ручні маніфести
+
+## Структура
+
+| Шлях | Зміст |
+|---|---|
+| `Platform.AppHost/aspirate-output/` | маніфести, згенеровані aspirate з AppHost (без секретів) |
+| `Services/Catalog/Catalog.Api/Dockerfile`, `Platform.ApiGateway/Dockerfile` | багатоетапні Dockerfile: SDK лише компілює, фінальний образ `aspnet`; спершу копіюються `.csproj` і виконується `restore` (окремий кешований шар) |
+| `deploy/k8s/` | власні Deployment/Service/ConfigMap, скрипти створення Secrets, [README](deploy/k8s/README.md) |
+
+## Частина 1 — Aspir8 (aspirate)
+
+```powershell
+dotnet tool install -g aspirate
+kubectl config use-context docker-desktop
+cd Platform.AppHost
+aspirate init
+aspirate generate          # образи + маніфести в ./aspirate-output
+aspirate apply             # або: kubectl apply -k ./aspirate-output
+kubectl get pods -w
+kubectl port-forward service/gateway 8080:8080      # порт сервісу — з kubectl get services
+aspirate destroy           # перед частиною 2
+```
+
+Aspirate кладе `Jwt__SecretKey` і паролі контейнерів у ConfigMap-літерали `kustomization.yaml`, тому перед комітом виконується `./scripts/redact-aspirate-secrets.ps1` — значення замінюються на `<redacted>`. `aspirate-state.json` (зашифрований стан) у git не потрапляє.
+
+## Частини 2–3 — ручне розгортання, ConfigMap і Secret
+
+Повні команди, порядок розгортання і контрольні точки — у [deploy/k8s/README.md](deploy/k8s/README.md).
+
+* **Health checks.** Kubernetes використовує endpoints Лаб. 07: liveness — `/health/live`, readiness — `/health/ready`, startup — `/health/startup`. Їх реєструє `MapDefaultEndpoints()` у `Platform.ServiceDefaults/Extensions.cs` для **всіх** середовищ, не лише Development.
+* **ConfigMap** (`deploy/k8s/configmap.yaml`) — відкриті дані: `ASPNETCORE_ENVIRONMENT` та адреси сервісів `services__catalog-api__http__0: "http://catalog-api"` (формат service discovery Aspire, код Gateway не змінюється).
+* **Secrets** створюються командою `kubectl create secret generic` (скрипти `deploy/k8s/create-secrets.ps1|sh`) із змінних оточення, тож значень у репозиторії немає: рядки підключення `ConnectionStrings__*`, ключ підпису JWT `Jwt__SecretKey` (Лаб. 09), паролі SQL Server і RabbitMQ. До контейнера вони підключаються через `envFrom` (`configMapRef` / `secretRef`). Secrets лише закодовані в Base64 — у production потрібні шифрування etcd або зовнішнє сховище.
+* **Service discovery.** Gateway звертається до `http://catalog-api` — вбудований DNS Kubernetes перетворює ім'я Service на його адресу.
+* **/api/products.** Через Лаб. 09 маршрут вимагає JWT з permission `products:read`; для перевірки в кластері — `deploy/k8s/mint-dev-token.ps1`.
+

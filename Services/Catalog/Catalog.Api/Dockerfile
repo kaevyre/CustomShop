@@ -1,9 +1,10 @@
-# Збірка з кореня репозиторію (Catalog.Api посилається на Platform.ServiceDefaults):
-#   docker build -f Services/Catalog/Catalog.Api/Dockerfile -t catalog-api .
+# Збірка з кореня репозиторію (Catalog.Api посилається на Platform.ServiceDefaults і Platform.EventBus):
+#   docker build -f Services/Catalog/Catalog.Api/Dockerfile -t catalog-api:v1 .
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
 COPY Platform.ServiceDefaults/Platform.ServiceDefaults.csproj Platform.ServiceDefaults/
+COPY Platform.EventBus/Platform.EventBus.csproj Platform.EventBus/
 COPY Services/Catalog/Catalog.Domain/Catalog.Domain.csproj Services/Catalog/Catalog.Domain/
 COPY Services/Catalog/Catalog.Dal/Catalog.Dal.csproj Services/Catalog/Catalog.Dal/
 COPY Services/Catalog/Catalog.Bll/Catalog.Bll.csproj Services/Catalog/Catalog.Bll/
@@ -11,10 +12,11 @@ COPY Services/Catalog/Catalog.Api/Catalog.Api.csproj Services/Catalog/Catalog.Ap
 RUN dotnet restore Services/Catalog/Catalog.Api/Catalog.Api.csproj
 
 COPY Platform.ServiceDefaults/ Platform.ServiceDefaults/
+COPY Platform.EventBus/ Platform.EventBus/
 COPY Services/Catalog/ Services/Catalog/
 RUN dotnet publish Services/Catalog/Catalog.Api/Catalog.Api.csproj -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 ENV Kestrel__Endpoints__http__Url=http://+:8080

@@ -1,0 +1,35 @@
+# Відкриті (несекретні) налаштування. Подвійне підкреслення __ у .NET-конфігурації = двокрапка:
+#   services__catalog-api__http__0  ->  services:catalog-api:http:0
+# Так само Aspire передавав адреси для service discovery (Лаб. 05), тому код Gateway не змінюється.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  # DNS-імена Kubernetes Service (namespace default): http://<ім'я-сервісу> -> порт 80 сервісу
+  services__catalog-api__http__0: "http://catalog-api"
+  services__orders-api__http__0: "http://orders-api"
+  services__reviews-api__http__0: "http://reviews-api"
+  services__auth-api__http__0: "http://auth-api"
+  services__payments-api__http__0: "http://payments-api"
+  services__aggregator__http__0: "http://aggregator"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-config
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  # у Production сідінг вимкнено за замовчуванням (Catalog.Api/Program.cs) — вмикаємо для демонстрації
+  Database__Seed: "true"
+  Jwt__Issuer: "auth-service"
+  Jwt__Audience: "microservices-platform"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sqlserver-config
+data:
+  ACCEPT_EULA: "Y"
+  MSSQL_PID: "Developer"
