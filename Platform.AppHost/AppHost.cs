@@ -69,6 +69,69 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WaitFor(rabbit)
     .WithHttpHealthCheck("/health", endpointName: "http");
 
+// ───────── Лаб. 09: автентифікація й авторизація ─────────
+// Секрет підпису JWT Auth Service і адмін Keycloak — параметри (dev-значення в appsettings.json AppHost, у production — user-secrets/Key Vault).
+var jwtSecret = builder.AddParameter("jwt-secret", secret: true);
+var keycloakAdmin = builder.AddParameter("keycloak-admin");
+var keycloakAdminPassword = builder.AddParameter("keycloak-admin-password", secret: true);
+
+const string JwtIssuer = "auth-service";
+const string JwtAudience = "microservices-platform";
+const string IdentityServerUrl = "http://localhost:5300";
+const string KeycloakRealm = "DevRealmDrivers";
+// true → сервіси відхиляють запити повз Gateway (заголовок X-Gateway-Secret). Вимкнено за замовчуванням: Swagger UI сервісів викликає їх напряму.
+const bool EnforceGatewayOnly = false;
+
+// Частина 1: ASP.NET Identity + JWT — ОКРЕМА БД "IdentityDb" на власному SQL Server (пароль SA — той самий параметр sql-password).
+var identityDb = builder.AddSqlServer("identity-sql", sqlPassword)
+    .WithDataVolume("customshop-identity-sql")
+    .AddDatabase("IdentityDb");
+
+var auth = builder.AddProject<Projects.Auth_Api>("auth-api")
+    .WithReference(identityDb)
+    .WaitFor(identityDb)
+    .WithEnvironment("Jwt__SecretKey", jwtSecret)
+    .WithEnvironment("Jwt__Issuer", JwtIssuer)
+    .WithEnvironment("Jwt__Audience", JwtAudience)
+    .WithEnvironment("Gateway__Secret", EnforceGatewayOnly ? "gateway-shared-secret-dev" : "")
+    .WithHttpHealthCheck("/health", endpointName: "http");
+
+// Частина 2: Duende IdentityServer — окремий SQL Server і БД "IdentityServerDb" (ізоляція безпеки від бізнес-сервісів).
+// Порт 5000 зайнятий Gateway (Лаб. 05), тому IdentityServer — на 5300.
+var identityServerDb = builder.AddSqlServer("identityserver-sql", sqlPassword)
+    .WithDataVolume("customshop-identityserver-sql")
+    .AddDatabase("IdentityServerDb");
+
+var identityServer = builder.AddProject<Projects.Platform_IdentityServer>("identityserver")
+    .WithReference(identityServerDb)
+    .WaitFor(identityServerDb)
+    .WithHttpEndpoint(port: 5300);
+
+// Частина 3: Keycloak (Aspire-інтеграція). WithDataVolume зберігає realm і користувачів між перезапусками;
+// сам realm, clients, ролі та користувачі створює `pulumi up` з infra/keycloak.
+var keycloak = builder.AddKeycloak("keycloak", 8080, keycloakAdmin, keycloakAdminPassword)
+    .WithDataVolume("customshop-keycloak");
+
+// Payments — demo-сервіс для перевірки доступу (Лаб. 09): endpoints-заглушки, permissions лише в ролі admin.
+var payments = builder.AddProject<Projects.Payments_Api>("payments-api")
+    .WithHttpHealthCheck("/health", endpointName: "http");
+
+// Спільна конфігурація автентифікації: сервіс приймає токени ВСІХ трьох провайдерів (схема обирається за claim "iss").
+IResourceBuilder<ProjectResource> WithAuth(IResourceBuilder<ProjectResource> project) => project
+    .WithReference(keycloak)
+    .WithEnvironment("Jwt__SecretKey", jwtSecret)
+    .WithEnvironment("Jwt__Issuer", JwtIssuer)
+    .WithEnvironment("Jwt__Audience", JwtAudience)
+    .WithEnvironment("IdentityServer__Authority", IdentityServerUrl)
+    .WithEnvironment("Keycloak__Realm", KeycloakRealm)
+    .WithEnvironment("Keycloak__PublicUrl", "http://localhost:8080")
+    .WithEnvironment("Gateway__Secret", EnforceGatewayOnly ? "gateway-shared-secret-dev" : "");
+
+WithAuth(orders);
+WithAuth(catalog);
+WithAuth(reviews);
+WithAuth(payments);
+
 // Aggregator (Лаб. 05–06): паралельно опитує сервіси через gRPC; стартує після них і Redis.
 // WithReference(orders) дає змінні services__orders-api__grpc__0 → service discovery за адресою http://_grpc.orders-api.
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
@@ -76,16 +139,21 @@ var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WaitFor(orders).WaitFor(catalog).WaitFor(reviews)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithEnvironment("IdentityServer__Authority", IdentityServerUrl)   // Лаб. 09: Client Credentials Flow (aggregator_service)
+    .WaitFor(identityServer)
     .WithHttpHealthCheck("/health");
+WithAuth(aggregator);
 
 // API Gateway (YARP) — єдина точка входу з фіксованим портом 5000; маршрутизує до всіх сервісів і Aggregator.
 // Порядок запуску: БД → сервіси → Aggregator → Gateway.
-builder.AddProject<Projects.Platform_ApiGateway>("gateway")
+var gateway = builder.AddProject<Projects.Platform_ApiGateway>("gateway")
     .WithHttpEndpoint(port: 5000, name: "public")
     .WithReference(orders).WithReference(catalog).WithReference(reviews)
+    .WithReference(auth).WithReference(payments)                      // Лаб. 09: /auth/**, /users/**, /api/payments/**
     .WithReference(aggregator)
     .WaitFor(aggregator)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
+WithAuth(gateway);                                                    // Лаб. 09: Gateway валідує JWT перед проксіюванням
 
 builder.Build().Run();

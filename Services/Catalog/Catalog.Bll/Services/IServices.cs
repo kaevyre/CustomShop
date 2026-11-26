@@ -14,6 +14,7 @@ public interface IProductService
     Task<ProductDto> RemoveStockAsync(long id, StockChangeDto dto, CancellationToken ct = default);
     Task AssignCategoryAsync(long id, AssignCategoryDto dto, CancellationToken ct = default);
     Task RemoveCategoryAsync(long id, int categoryId, CancellationToken ct = default);
+    Task<ProductDto> PublishAsync(long id, CancellationToken ct = default);
     Task DeleteAsync(long id, CancellationToken ct = default);
 }
 

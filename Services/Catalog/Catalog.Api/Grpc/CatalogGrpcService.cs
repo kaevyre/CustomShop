@@ -4,6 +4,7 @@ using Catalog.Bll.Services;
 using Catalog.Domain.Exceptions;
 using Catalog.Grpc;
 using Grpc.Core;
+using Platform.ServiceDefaults.Security;
 
 namespace Catalog.Api.Grpc;
 
@@ -11,6 +12,7 @@ namespace Catalog.Api.Grpc;
 /// gRPC-адаптер над BLL (як контролер): викликає той самий IProductService, тож кеш працює для REST і gRPC без дублювання.
 /// Доменні винятки перетворюються на RpcException з точним кодом, а не на загальний Internal.
 /// </summary>
+[RequirePermission("products:read")]        // Лаб. 09: Aggregator викликає з токеном Client Credentials (scope products.read)
 public sealed class CatalogGrpcService(IProductService products, CatalogMetrics metrics) : CatalogService.CatalogServiceBase
 {
     private const int MaxIds = 100;

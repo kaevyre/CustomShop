@@ -12,6 +12,7 @@ using Orders.Dal.Abstractions;
 using Orders.Dal.Infrastructure;
 using Orders.Dal.Repositories;
 using Platform.EventBus;
+using Platform.ServiceDefaults.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();                 // Лаб. 05: Serilog, OpenTelemetry, health checks, service discovery
@@ -83,9 +84,46 @@ builder.Services.AddGrpc(o =>
 builder.Services.AddGrpcHealthChecks(o =>
     o.Services.Map("", check => check.Tags.Contains("database")));
 
+// Лаб. 09: сервіс валідує JWT САМОСТІЙНО (підпис, issuer, audience, lifetime), без запитів до провайдера:
+// Auth Service (HMAC) / Duende IdentityServer (Authority, audience "orders_api") / Keycloak (AddKeycloakJwtBearer, audience "orders-api").
+builder.AddPlatformAuthentication(new ServiceAudiences(Keycloak: "orders-api", IdentityServer: "orders_api"));
+
+// Політика на КОЖЕН permission з таблиці 3.3.1; рішення приймається ЛОКАЛЬНО за claim authorization.permissions (або scope IdentityServer)
+builder.Services.AddPermissionAuthorization(
+    "orders:read", "orders:create", "orders:update", "orders:delete", "orders:approve");
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    // Swagger UI — public client "swagger" в IdentityServer: Authorization Code + PKCE
+    var authority = builder.Configuration["IdentityServer:Authority"] ?? "http://localhost:5300";
+    c.AddSecurityDefinition("oauth2", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.OAuth2,
+        Flows = new Microsoft.OpenApi.Models.OpenApiOAuthFlows
+        {
+            AuthorizationCode = new Microsoft.OpenApi.Models.OpenApiOAuthFlow
+            {
+                AuthorizationUrl = new Uri($"{authority}/connect/authorize"),
+                TokenUrl = new Uri($"{authority}/connect/token"),
+                Scopes = new Dictionary<string, string>
+                {
+                    ["openid"] = "OpenID", ["profile"] = "Profile",
+                    ["orders.read"] = "Read orders", ["orders.write"] = "Create/update orders"
+                }
+            }
+        }
+    });
+    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        [new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+        {
+            Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                { Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme, Id = "oauth2" }
+        }] = ["openid", "orders.read"]
+    });
+});
 
 builder.Services.AddProblemDetails(options =>
     options.CustomizeProblemDetails = context =>
@@ -98,7 +136,15 @@ app.UseMiddleware<CorrelationIdMiddleware>();  // X-Correlation-Id → LogContex
 app.UseExceptionHandler();
 
 app.UseSwagger();
-app.UseSwaggerUI();
+app.UseSwaggerUI(c =>
+{
+    c.OAuthClientId("swagger");
+    c.OAuthUsePkce();
+});
+
+app.UseGatewayOnly();                  // Лаб. 09: прямий доступ повз Gateway блокується (якщо задано Gateway:Secret)
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapDefaultEndpoints();                     // /health, /alive, /health/live, /health/ready, /health/startup
 app.MapControllers();

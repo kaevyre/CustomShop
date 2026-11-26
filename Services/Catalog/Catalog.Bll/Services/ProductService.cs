@@ -232,6 +232,16 @@ public sealed class ProductService : IProductService
         await InvalidateProductAsync(id, "ProductCategoryRemoved");
     }
 
+    public async Task<ProductDto> PublishAsync(long id, CancellationToken ct = default)
+    {
+        var product = await LoadAsync(id, ct);
+        product.Publish();
+        await _uow.SaveChangesAsync(ct);
+        await InvalidateProductAsync(id, "ProductPublished");
+        _logger.LogInformation("Product {ProductId} published", id);
+        return _mapper.Map<ProductDto>(product);
+    }
+
     public async Task DeleteAsync(long id, CancellationToken ct = default)
     {
         var product = await _uow.Products.GetByIdAsync(id, ct)

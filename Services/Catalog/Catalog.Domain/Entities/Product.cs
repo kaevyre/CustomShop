@@ -106,6 +106,9 @@ public class Product : AuditableEntity
         _productCategories.Remove(link);
     }
 
+    /// <summary>Лаб. 09: публікація — товар активний (доступний для замовлень). Операція ідемпотентна.</summary>
+    public void Publish() => IsActive = true;
+
     public void Delete()
     {
         IsActive = false;

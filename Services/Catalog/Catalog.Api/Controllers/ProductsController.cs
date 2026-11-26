@@ -1,3 +1,4 @@
+using Platform.ServiceDefaults.Security;
 using Catalog.Api.Metrics;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
@@ -20,6 +21,7 @@ public sealed class ProductsController : ControllerBase
     }
 
     /// <summary>Список з пагінацією, фільтрами й сортуванням; метадані — в тілі і в заголовках X-Total-Count, X-Total-Pages.</summary>
+    [RequirePermission("products:read")]
     [HttpGet]
     public async Task<ActionResult<PagedResult<ProductDto>>> GetList(
         [FromQuery] ProductQuery query, [FromServices] IValidator<ProductQuery> validator, CancellationToken ct)
@@ -33,10 +35,12 @@ public sealed class ProductsController : ControllerBase
         return Ok(result);
     }
 
+    [RequirePermission("products:read")]
     [HttpGet("{id:long}")]
     public async Task<ActionResult<ProductDetailsDto>> GetById(long id, CancellationToken ct) =>
         Ok(await _metrics.MeasureAsync("get", () => _products.GetByIdAsync(id, ct)));
 
+    [RequirePermission("products:create")]
     [HttpPost]
     public async Task<ActionResult<ProductDetailsDto>> Create(
         CreateProductDto dto, [FromServices] IValidator<CreateProductDto> validator, CancellationToken ct)
@@ -49,6 +53,7 @@ public sealed class ProductsController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
+    [RequirePermission("products:update")]
     [HttpPut("{id:long}/price")]
     public async Task<ActionResult<ProductDto>> ChangePrice(
         long id, ChangePriceDto dto, [FromServices] IValidator<ChangePriceDto> validator, CancellationToken ct)
@@ -62,6 +67,7 @@ public sealed class ProductsController : ControllerBase
     }
 
     /// <summary>Перейменування товару: після збереження публікується ProductRenamedEvent (Відгуки оновлюють productName).</summary>
+    [RequirePermission("products:update")]
     [HttpPut("{id:long}/name")]
     public async Task<ActionResult<ProductDto>> Rename(
         long id, RenameProductDto dto, [FromServices] IValidator<RenameProductDto> validator, CancellationToken ct)
@@ -74,6 +80,7 @@ public sealed class ProductsController : ControllerBase
         return Ok(product);
     }
 
+    [RequirePermission("products:update")]
     [HttpPost("{id:long}/stock/add")]
     public async Task<ActionResult<ProductDto>> AddStock(long id, StockChangeDto dto, CancellationToken ct)
     {
@@ -82,6 +89,7 @@ public sealed class ProductsController : ControllerBase
         return Ok(product);
     }
 
+    [RequirePermission("products:update")]
     [HttpPost("{id:long}/stock/remove")]
     public async Task<ActionResult<ProductDto>> RemoveStock(long id, StockChangeDto dto, CancellationToken ct)
     {
@@ -90,6 +98,7 @@ public sealed class ProductsController : ControllerBase
         return Ok(product);
     }
 
+    [RequirePermission("products:update")]
     [HttpPost("{id:long}/categories")]
     public async Task<IActionResult> AssignCategory(long id, AssignCategoryDto dto, CancellationToken ct)
     {
@@ -97,6 +106,7 @@ public sealed class ProductsController : ControllerBase
         return NoContent();
     }
 
+    [RequirePermission("products:update")]
     [HttpDelete("{id:long}/categories/{categoryId:int}")]
     public async Task<IActionResult> RemoveCategory(long id, int categoryId, CancellationToken ct)
     {
@@ -104,6 +114,17 @@ public sealed class ProductsController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>Публікація товару (IsActive = true): товар стає доступним для замовлень — permission products:publish.</summary>
+    [RequirePermission("products:publish")]
+    [HttpPost("{id:long}/publish")]
+    public async Task<ActionResult<ProductDto>> Publish(long id, CancellationToken ct)
+    {
+        var product = await _metrics.MeasureAsync("publish", () => _products.PublishAsync(id, ct));
+        _metrics.ProductUpdated("publish");
+        return Ok(product);
+    }
+
+    [RequirePermission("products:delete")]
     [HttpDelete("{id:long}")]
     public async Task<IActionResult> Delete(long id, CancellationToken ct)
     {

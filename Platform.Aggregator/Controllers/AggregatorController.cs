@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Platform.Aggregator.Models;
 using Platform.Aggregator.Services;
@@ -5,6 +6,7 @@ using Platform.Aggregator.Services;
 namespace Platform.Aggregator.Controllers;
 
 [ApiController]
+[Authorize]                        // Лаб. 09: користувач автентифікований (JWT із Gateway); до сервісів Aggregator ходить зі СВОЇМ токеном Client Credentials
 [Route("api/aggregator")]
 public sealed class AggregatorController(OrderCardService cards, HttpOrderCardService httpCards) : ControllerBase
 {

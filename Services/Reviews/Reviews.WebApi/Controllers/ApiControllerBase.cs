@@ -2,6 +2,7 @@ using AutoMapper;
 using FluentValidation;
 using FluentValidation.Results;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Reviews.WebApi.Controllers;
@@ -11,6 +12,7 @@ namespace Reviews.WebApi.Controllers;
 /// Плюс робота з ETag / If-Match для оптимістичної конкурентності.
 /// </summary>
 [ApiController]
+[Authorize]                       // Лаб. 09: Reviews не входить у матрицю permissions — достатньо валідного JWT
 [Produces("application/json")]
 public abstract class ApiControllerBase : ControllerBase
 {

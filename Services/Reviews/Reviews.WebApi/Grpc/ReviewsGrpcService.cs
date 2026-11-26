@@ -14,6 +14,7 @@ namespace Reviews.WebApi.Grpc;
 /// gRPC-адаптер над Application-шаром (як контролер): надсилає ті самі запити через ISender, тож валідація
 /// й кеш pipeline-а працюють для REST і gRPC. Винятки перетворюються на RpcException з точним кодом.
 /// </summary>
+[Microsoft.AspNetCore.Authorization.Authorize]   // Лаб. 09: Aggregator викликає з токеном Client Credentials
 public sealed class ReviewsGrpcService(ISender mediator) : ReviewsService.ReviewsServiceBase
 {
     private const int MaxProducts = 100;

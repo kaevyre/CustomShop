@@ -5,10 +5,12 @@ using Orders.Bll.Dtos;
 using Orders.Bll.Services;
 using Orders.Domain.Exceptions;
 using Orders.Grpc;
+using Platform.ServiceDefaults.Security;
 
 namespace Orders.Api.Grpc;
 
 /// <summary>gRPC-адаптер над BLL (як контролер): перетворює DTO на повідомлення, а доменні винятки — на RpcException.</summary>
+[RequirePermission("orders:read")]          // Лаб. 09: Aggregator викликає з токеном Client Credentials (scope orders.read)
 public sealed class OrdersGrpcService(IOrderService orders, OrderMetrics metrics) : OrdersService.OrdersServiceBase
 {
     public override async Task<OrderReply> GetOrder(GetOrderRequest request, ServerCallContext context)
